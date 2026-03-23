@@ -25,11 +25,14 @@ def load_data():
     url = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/gviz/tq?tqx=out:csv"
     df = pd.read_csv(url)
     
-    # 1. Limpieza de Fechas y Orden Cronológico
+    # 1. ELIMINAR COLUMNAS "UNNAMED" (Limpieza de basura de Excel)
+    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+    
+    # 2. Limpieza de Fechas y Orden Cronológico
     df['FECHA_INICIO'] = pd.to_datetime(df['FECHA_INICIO'], dayfirst=True, errors='coerce')
     df = df.sort_values(by='FECHA_INICIO', ascending=True)
     
-    # 2. Limpieza de Numéricos
+    # 3. Limpieza de Numéricos
     columnas_num = ['HORAS_EJECUTADAS', 'TOTAL_ACCIONES', 'OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']
     for col in columnas_num:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -64,7 +67,7 @@ try:
         st.title("Control de Ejecución Formativa - INFOTEP")
         st.caption("Analítica de Datos | Diógenes Leonel Tavarez")
         
-        # KPIS con formato entero
+        # KPIS
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Horas Ejecutadas", f"{int(df['HORAS_EJECUTADAS'].sum()):,}")
@@ -83,10 +86,10 @@ try:
             fig1 = px.bar(
                 df_chart, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'],
                 barmode='group',
-                text_auto=True, # ESTO AGREGA LOS NÚMEROS ARRIBA DE LAS BARRAS
+                text_auto=True,
                 color_discrete_map={'HORAS_EJECUTADAS': '#0056b3', 'PARTICIPANTES': '#ffcc00', 'TOTAL_ACCIONES': '#28a745'}
             )
-            fig1.update_traces(textposition='outside') # Coloca el texto fuera de la barra
+            fig1.update_traces(textposition='outside')
             st.plotly_chart(fig1, use_container_width=True)
 
         with col_right:
@@ -95,14 +98,15 @@ try:
             fig2 = px.bar(
                 df_stack, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'],
                 barmode='relative',
-                text_auto=True, # NÚMEROS DENTRO DE LOS SEGMENTOS APILADOS
+                text_auto=True,
                 color_discrete_map={'OPERARIOS': '#0056b3', 'MANDOS_MEDIOS': '#ffcc00', 'GERENTES': '#e63946'}
             )
             st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
-        st.subheader("Registros Organizados por Fecha")
+        st.subheader("Base de Datos Limpia (Sin columnas extra)")
         df_display = df.copy()
+        # Formatear fecha para la tabla
         df_display['FECHA_INICIO'] = df_display['FECHA_INICIO'].dt.strftime('%d/%m/%Y')
         st.dataframe(df_display, use_container_width=True)
 
