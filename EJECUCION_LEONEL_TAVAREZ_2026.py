@@ -16,7 +16,6 @@ st.markdown("""
         border-left: 5px solid #0056b3;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
     }
-    /* Eliminar espacios innecesarios arriba */
     .block-container { padding-top: 2rem; }
     </style>
     """, unsafe_allow_html=True)
@@ -65,7 +64,7 @@ try:
         st.title("Control de Ejecución Formativa - INFOTEP")
         st.caption("Analítica de Datos | Diógenes Leonel Tavarez")
         
-        # KPIS
+        # KPIS con formato entero
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Horas Ejecutadas", f"{int(df['HORAS_EJECUTADAS'].sum()):,}")
@@ -84,18 +83,19 @@ try:
             fig1 = px.bar(
                 df_chart, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'],
                 barmode='group',
+                text_auto=True, # ESTO AGREGA LOS NÚMEROS ARRIBA DE LAS BARRAS
                 color_discrete_map={'HORAS_EJECUTADAS': '#0056b3', 'PARTICIPANTES': '#ffcc00', 'TOTAL_ACCIONES': '#28a745'}
             )
+            fig1.update_traces(textposition='outside') # Coloca el texto fuera de la barra
             st.plotly_chart(fig1, use_container_width=True)
 
         with col_right:
             st.subheader("Composición de Participantes")
-            # Preparar datos para barras apiladas
             df_stack = df.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index()
             fig2 = px.bar(
                 df_stack, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'],
-                title="Jerarquías por Empresa",
                 barmode='relative',
+                text_auto=True, # NÚMEROS DENTRO DE LOS SEGMENTOS APILADOS
                 color_discrete_map={'OPERARIOS': '#0056b3', 'MANDOS_MEDIOS': '#ffcc00', 'GERENTES': '#e63946'}
             )
             st.plotly_chart(fig2, use_container_width=True)
