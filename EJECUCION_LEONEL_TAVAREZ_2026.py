@@ -6,7 +6,7 @@ from io import BytesIO
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Dashboard INFOTEP - Leonel Tavarez", layout="wide")
 
-# Estilo para KPIs con colores corporativos
+# Estilo para KPIs y limpieza visual
 st.markdown("""
     <style>
     .stMetric {
@@ -16,6 +16,8 @@ st.markdown("""
         border-left: 5px solid #0056b3;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
     }
+    /* Eliminar espacios innecesarios arriba */
+    .block-container { padding-top: 2rem; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -28,15 +30,12 @@ def load_data():
     df['FECHA_INICIO'] = pd.to_datetime(df['FECHA_INICIO'], dayfirst=True, errors='coerce')
     df = df.sort_values(by='FECHA_INICIO', ascending=True)
     
-    # 2. Limpieza de Numéricos (Sin decimales en visualización)
+    # 2. Limpieza de Numéricos
     columnas_num = ['HORAS_EJECUTADAS', 'TOTAL_ACCIONES', 'OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']
     for col in columnas_num:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
-    # Calcular Total Participantes
     df['PARTICIPANTES'] = df['OPERARIOS'] + df['MANDOS_MEDIOS'] + df['GERENTES']
-    
-    # Extraer Mes para el Slicer
     df['MES'] = df['FECHA_INICIO'].dt.month_name()
     
     return df
@@ -44,17 +43,12 @@ def load_data():
 try:
     df_original = load_data()
     
-    # --- BARRA LATERAL (SLICERS) ---
-    st.sidebar.image("https://www.infotep.gob.do/images/logo.png", width=150) # Logo genérico INFOTEP
-    st.sidebar.header("Filtros de Control")
+    # --- BARRA LATERAL (FILTROS) ---
+    st.sidebar.title("🛠️ Panel de Control")
+    st.sidebar.markdown("---")
     
-    # Slicer de Estado
     filtro_estado = st.sidebar.multiselect("Estado de la Acción", options=df_original["ESTADO"].unique(), default=df_original["ESTADO"].unique())
-    
-    # Slicer de Empresa
     filtro_empresa = st.sidebar.multiselect("Seleccionar Empresa", options=df_original["EMPRESA"].unique())
-    
-    # Slicer de Mes
     filtro_mes = st.sidebar.multiselect("Mes de Inicio", options=df_original["MES"].unique())
 
     # Aplicar Filtros
@@ -64,13 +58,14 @@ try:
     if filtro_mes:
         df = df[df["MES"].isin(filtro_mes)]
 
-    # --- NAVEGACIÓN POR PÁGINAS ---
-    tabs = st.tabs(["📊 Dashboard Principal", "📋 Detalle de Datos"])
+    # --- NAVEGACIÓN ---
+    tabs = st.tabs(["📊 Dashboard de Gestión", "📋 Detalle de Datos"])
 
     with tabs[0]:
-        st.title("Control de Ejecución Formativa")
+        st.title("Control de Ejecución Formativa - INFOTEP")
+        st.caption("Analítica de Datos | Diógenes Leonel Tavarez")
         
-        # KPIS con formato entero
+        # KPIS
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Horas Ejecutadas", f"{int(df['HORAS_EJECUTADAS'].sum()):,}")
@@ -79,44 +74,48 @@ try:
         with col3:
             st.metric("Total Participantes", f"{int(df['PARTICIPANTES'].sum()):,}")
 
-        # Gráfico Multivariable (Comparativa)
-        st.subheader("Comparativa: Horas, Participantes y Acciones")
-        df_chart = df.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
+        st.markdown("---")
         
-        fig = px.bar(
-            df_chart, 
-            x='EMPRESA', 
-            y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'],
-            barmode='group',
-            color_discrete_map={
-                'HORAS_EJECUTADAS': '#0056b3', # Azul INFOTEP
-                'PARTICIPANTES': '#ffcc00',    # Mostaza/Naranja INFOTEP
-                'TOTAL_ACCIONES': '#28a745'    # Verde
-            }
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.subheader("Comparativa de Ejecución")
+            df_chart = df.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
+            fig1 = px.bar(
+                df_chart, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'],
+                barmode='group',
+                color_discrete_map={'HORAS_EJECUTADAS': '#0056b3', 'PARTICIPANTES': '#ffcc00', 'TOTAL_ACCIONES': '#28a745'}
+            )
+            st.plotly_chart(fig1, use_container_width=True)
+
+        with col_right:
+            st.subheader("Composición de Participantes")
+            # Preparar datos para barras apiladas
+            df_stack = df.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index()
+            fig2 = px.bar(
+                df_stack, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'],
+                title="Jerarquías por Empresa",
+                barmode='relative',
+                color_discrete_map={'OPERARIOS': '#0056b3', 'MANDOS_MEDIOS': '#ffcc00', 'GERENTES': '#e63946'}
+            )
+            st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
-        st.subheader("Base de Datos Filtrada")
-        
-        # Mostrar tabla ordenada
+        st.subheader("Registros Organizados por Fecha")
         df_display = df.copy()
         df_display['FECHA_INICIO'] = df_display['FECHA_INICIO'].dt.strftime('%d/%m/%Y')
         st.dataframe(df_display, use_container_width=True)
 
-        # --- BOTONES DE EXPORTACIÓN ---
-        st.markdown("### Exportar Reporte")
-        col_btn1, col_btn2 = st.columns(2)
-        
-        # Exportar CSV
+        # Exportación
+        st.markdown("### 📥 Descargar Reporte")
+        col_b1, col_b2 = st.columns(2)
         csv = df.to_csv(index=False).encode('utf-8')
-        col_btn1.download_button("Descargar en CSV", data=csv, file_name="reporte_leonel_tavarez.csv", mime="text/csv")
+        col_b1.download_button("Descargar CSV", data=csv, file_name="reporte_infotep.csv", mime="text/csv")
         
-        # Exportar Excel (XLSX)
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Ejecucion')
-        col_btn2.download_button("Descargar en Excel", data=output.getvalue(), file_name="reporte_leonel_tavarez.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            df.to_excel(writer, index=False)
+        col_b2.download_button("Descargar Excel", data=output.getvalue(), file_name="reporte_infotep.xlsx")
 
 except Exception as e:
-    st.error(f"Se detectó un cambio en la estructura: {e}")
+    st.error(f"Error en el sistema: {e}")
