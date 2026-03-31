@@ -17,7 +17,6 @@ def get_drive_service():
         info_json = st.secrets["google_creds"]["json_data"]
         info = json.loads(info_json)
         if "private_key" in info:
-            # Soporte para ambos formatos de escape de la llave
             info["private_key"] = info["private_key"].replace("\\n", "\n")
         creds = service_account.Credentials.from_service_account_info(info)
         return build('drive', 'v3', credentials=creds)
@@ -79,57 +78,49 @@ try:
         
         st.divider()
         
-        # --- GRÁFICO DE BARRAS TRIPLE CON COLORES INFOTEP ---
-        st.subheader("Análisis Comparativo por Empresa")
-        df_grafico = df.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
+        col_graf_1, col_graf_2 = st.columns(2)
         
-        fig_triple = px.bar(
-            df_grafico, 
-            x='EMPRESA', 
-            y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'],
-            barmode='group',
-            text_auto='.2s',
-            title="Ejecución: Horas, Participantes y Acciones",
-            color_discrete_map={
-                'HORAS_EJECUTADAS': '#0056b3', # Azul Infotep
-                'PARTICIPANTES': '#ffcc00',    # Amarillo/Dorado Infotep
-                'TOTAL_ACCIONES': '#28a745'    # Verde Infotep
-            }
-        )
-        st.plotly_chart(fig_triple, use_container_width=True)
+        with col_graf_1:
+            st.subheader("Ejecución: Horas, Part. y Acciones")
+            df_graf1 = df.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
+            fig1 = px.bar(
+                df_graf1, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'],
+                barmode='group', text_auto='.2s',
+                color_discrete_map={'HORAS_EJECUTADAS': '#0056b3', 'PARTICIPANTES': '#ffcc00', 'TOTAL_ACCIONES': '#28a745'}
+            )
+            st.plotly_chart(fig1, use_container_width=True)
+
+        with col_graf_2:
+            st.subheader("Distribución por Nivel de Mando")
+            df_graf2 = df.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index()
+            fig2 = px.bar(
+                df_graf2, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'],
+                barmode='stack', text_auto=True,
+                color_discrete_map={'OPERARIOS': '#0056b3', 'MANDOS_MEDIOS': '#ffcc00', 'GERENTES': '#17a2b8'}
+            )
+            st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
         st.subheader("Registros Detallados")
-        
-        col_d1, col_d2 = st.columns(2)
-        
-        # EXPORTAR EXCEL
-        output_excel = BytesIO()
-        with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Datos')
-        col_d1.download_button(label="📥 Descargar Excel", data=output_excel.getvalue(), file_name="Reporte_INFOTEP.xlsx", mime="application/vnd.ms-excel")
-        
-        # EXPORTAR CSV
-        csv_data = df.to_csv(index=False).encode('utf-8')
-        col_d2.download_button(label="📄 Descargar CSV", data=csv_data, file_name="Reporte_INFOTEP.csv", mime="text/csv")
-        
+        btn_c1, btn_c2 = st.columns(2)
+        # Excel
+        out_xl = BytesIO()
+        with pd.ExcelWriter(out_xl, engine='xlsxwriter') as w: df.to_excel(w, index=False)
+        btn_c1.download_button("📥 Descargar Excel", out_xl.getvalue(), "Reporte.xlsx", "application/vnd.ms-excel")
+        # CSV
+        btn_c2.download_button("📄 Descargar CSV", df.to_csv(index=False).encode('utf-8'), "Reporte.csv", "text/csv")
         st.dataframe(df, use_container_width=True, hide_index=True)
 
     with tabs[2]:
         st.subheader("Archivos en Drive")
         if f_empresa and len(f_empresa) == 1:
-            emp = f_empresa[0]
-            with st.spinner("Buscando en Drive..."):
-                archivos = list_files_in_folder(emp)
+            archivos = list_files_in_folder(f_empresa[0])
             if archivos:
                 for a in archivos:
-                    col_n, col_b = st.columns([4, 1])
-                    col_n.write(f"📄 {a['name']}")
-                    col_b.link_button("Abrir", a['webViewLink'])
-            else:
-                st.warning(f"No hay carpeta para '{emp}' en 'EMPRESAS CAPACITACION 2026'.")
-        else:
-            st.info("Seleccione **una sola empresa** en el panel lateral para ver sus documentos.")
+                    cn, cb = st.columns([4, 1])
+                    cn.write(f"📄 {a['name']}")
+                    cb.link_button("Abrir", a['webViewLink'])
+            else: st.warning("No se encontró la carpeta en Drive.")
+        else: st.info("Seleccione una sola empresa.")
 
-except Exception as e:
-    st.error(f"Error: {e}")
+except Exception as e: st.error(f"Error: {e}")
