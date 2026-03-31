@@ -9,143 +9,108 @@ from googleapiclient.discovery import build
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Dashboard INFOTEP - Leonel Tavarez", layout="wide")
 
-# --- CREDENCIALES DE GOOGLE DRIVE (ID CARPETA CAPACITACION 2026) ---
-# Este es el ID que me pasaste de tu carpeta "EMPRESAS CAPACITACION 2026"
+# --- CREDENCIALES DE GOOGLE DRIVE ---
 PARENT_FOLDER_ID = "19d0FCdGHQp9wG0DNBLgH5kPtG5rAGJ9r"
 
 def get_drive_service():
     try:
-        # Lee el JSON desde la variable json_data en los Secrets de Streamlit
         info_json = st.secrets["google_creds"]["json_data"]
         info = json.loads(info_json)
+        # Corrección técnica para la llave privada
+        if "private_key" in info:
+            info["private_key"] = info["private_key"].replace("\\n", "\n")
         creds = service_account.Credentials.from_service_account_info(info)
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        st.error(f"Error al cargar las credenciales de Google: {e}")
+        st.error(f"Error en credenciales: {e}")
         return None
 
 def list_files_in_folder(empresa_name):
     try:
         service = get_drive_service()
-        if not service:
-            return None
-            
-        # 1. Buscar la subcarpeta con el nombre exacto de la empresa dentro de la carpeta 2026
-        query_folder = f"name = '{empresa_name}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        results = service.files().list(q=query_folder, fields="files(id, name)").execute()
+        if not service: return None
+        query = f"name = '{empresa_name}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
         items = results.get('files', [])
-        
-        if not items:
-            return None
-        
-        folder_id = items[0]['id']
-        # 2. Listar todos los archivos dentro de esa subcarpeta encontrada
-        query_files = f"'{folder_id}' in parents and trashed = false"
-        results_files = service.files().list(q=query_files, fields="files(id, name, webViewLink, mimeType)").execute()
-        return results_files.get('files', [])
-    except Exception as e:
-        st.error(f"Error de conexión con Drive: {e}")
-        return []
+        if not items: return None
+        f_id = items[0]['id']
+        res = service.files().list(q=f"'{f_id}' in parents and trashed = false", fields="files(id, name, webViewLink, mimeType)").execute()
+        return res.get('files', [])
+    except: return []
 
-# --- ESTILOS PERSONALIZADOS ---
+# --- ESTILOS INFOTEP ---
 st.markdown("""
     <style>
-    .stMetric { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 5px solid #0056b3; }
-    .block-container { padding-top: 2rem; }
-    [data-testid="stMetricValue"] { font-size: 28px; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border-left: 5px solid #0056b3; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 4px 4px 0 0; padding: 10px; }
+    .stTabs [aria-selected="true"] { background-color: #0056b3; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
 @st.cache_data
 def load_data():
-    # Tu enlace de Google Sheets
     url = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/gviz/tq?tqx=out:csv"
     df = pd.read_csv(url)
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
     df['FECHA_INICIO'] = pd.to_datetime(df['FECHA_INICIO'], dayfirst=True, errors='coerce')
-    df = df.sort_values(by='FECHA_INICIO', ascending=True)
-    
-    # Limpieza de datos numéricos
     columnas_num = ['HORAS_EJECUTADAS', 'TOTAL_ACCIONES', 'OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']
     for col in columnas_num:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    
     df['PARTICIPANTES'] = df['OPERARIOS'] + df['MANDOS_MEDIOS'] + df['GERENTES']
     df['MES'] = df['FECHA_INICIO'].dt.month_name()
     return df
 
-# --- LÓGICA PRINCIPAL ---
 try:
-    df_original = load_data()
+    df_orig = load_data()
+    st.sidebar.title("🛠️ Gestión INFOTEP")
+    f_empresa = st.sidebar.multiselect("Empresa", options=sorted(df_orig["EMPRESA"].unique()))
+    f_estado = st.sidebar.multiselect("Estado", options=df_orig["ESTADO"].unique(), default=df_orig["ESTADO"].unique())
     
-    # --- FILTROS EN SIDEBAR ---
-    st.sidebar.header("🛠️ Filtros de Gestión")
-    filtro_estado = st.sidebar.multiselect("Estado del Programa", options=df_original["ESTADO"].unique(), default=df_original["ESTADO"].unique())
-    filtro_empresa = st.sidebar.multiselect("Seleccionar Empresa", options=sorted(df_original["EMPRESA"].unique()))
-    filtro_mes = st.sidebar.multiselect("Mes", options=df_original["MES"].unique())
+    df = df_orig[df_orig["ESTADO"].isin(f_estado)]
+    if f_empresa: df = df[df["EMPRESA"].isin(f_empresa)]
 
-    # Aplicar Filtros
-    df = df_original[df_original["ESTADO"].isin(filtro_estado)]
-    if filtro_empresa:
-        df = df[df["EMPRESA"].isin(filtro_empresa)]
-    if filtro_mes:
-        df = df[df["MES"].isin(filtro_mes)]
-
-    # --- NAVEGACIÓN POR PESTAÑAS (TABS) ---
     tabs = st.tabs(["📊 Dashboard Ejecutivo", "📋 Tabla de Datos", "📂 Repositorio Drive"])
 
     with tabs[0]:
-        st.title("Control de Ejecución INFOTEP 2026")
+        st.title("Control de Ejecución 2026")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Horas Totales", f"{int(df['HORAS_EJECUTADAS'].sum()):,}")
+        c2.metric("Acciones", f"{int(df['TOTAL_ACCIONES'].sum()):,}")
+        c3.metric("Participantes", f"{int(df['PARTICIPANTES'].sum()):,}")
         
-        # Métricas principales
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Horas Ejecutadas", f"{int(df['HORAS_EJECUTADAS'].sum()):,}")
-        m2.metric("Acciones Totales", f"{int(df['TOTAL_ACCIONES'].sum()):,}")
-        m3.metric("Total Participantes", f"{int(df['PARTICIPANTES'].sum()):,}")
-        
-        st.divider()
-        
-        col_chart1, col_chart2 = st.columns(2)
-        with col_chart1:
-            st.subheader("Esfuerzo por Empresa (Horas)")
-            df_bar = df.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES']].sum().reset_index()
-            fig1 = px.bar(df_bar, x='EMPRESA', y='HORAS_EJECUTADAS', text_auto=True, color_discrete_sequence=['#0056b3'])
+        col_a, col_b = st.columns(2)
+        # Colores INFOTEP: Azul (#0056b3) y Dorado (#ffcc00)
+        with col_a:
+            fig1 = px.bar(df.groupby('EMPRESA')['HORAS_EJECUTADAS'].sum().reset_index(), x='EMPRESA', y='HORAS_EJECUTADAS', title="Horas por Empresa", color_discrete_sequence=['#0056b3'])
             st.plotly_chart(fig1, use_container_width=True)
-            
-        with col_chart2:
-            st.subheader("Distribución de Mandos")
-            df_pie = df.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index()
-            fig2 = px.bar(df_pie, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'], barmode='relative', text_auto=True)
+        with col_b:
+            fig2 = px.bar(df.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index(), x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'], title="Distribución de Personal", color_discrete_map={'OPERARIOS':'#0056b3', 'MANDOS_MEDIOS':'#ffcc00', 'GERENTES':'#e63946'})
             st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
-        st.subheader("Detalle de Registros")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.subheader("Registros Detallados")
+        # BOTÓN DE DESCARGA EXCEL
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Datos')
+        st.download_button(label="📥 Descargar Tabla en Excel", data=output.getvalue(), file_name="Reporte_Infotep.xlsx", mime="application/vnd.ms-excel")
+        st.dataframe(df, use_container_width=True)
 
     with tabs[2]:
-        st.subheader("📂 Archivos en la Nube")
-        st.write("Esta sección conecta directamente con tu carpeta de Drive.")
-        
-        # Regla: Solo mostrar archivos si se selecciona UNA sola empresa
-        if filtro_empresa and len(filtro_empresa) == 1:
-            empresa_seleccionada = filtro_empresa[0]
-            st.success(f"Explorando documentos para: **{empresa_seleccionada}**")
-            
-            with st.spinner("Accediendo a Google Drive..."):
-                archivos = list_files_in_folder(empresa_seleccionada)
-            
+        st.subheader("Archivos en Drive")
+        if f_empresa and len(f_empresa) == 1:
+            emp = f_empresa[0]
+            archivos = list_files_in_folder(emp)
             if archivos:
-                for arc in archivos:
-                    col_icon, col_name, col_btn = st.columns([0.5, 4, 1.5])
-                    # Icono según tipo de archivo
-                    ext = "📄" if "pdf" in arc['mimeType'] else "📊"
-                    col_icon.write(ext)
-                    col_name.write(arc['name'])
-                    col_btn.link_button("Ver Archivo", arc['webViewLink'])
+                for a in archivos:
+                    col_n, col_b = st.columns([4, 1])
+                    col_n.write(f"📄 {a['name']}")
+                    col_b.link_button("Abrir", a['webViewLink'])
             else:
-                st.warning(f"No se encontró una carpeta llamada '{empresa_seleccionada}' dentro de 'EMPRESAS CAPACITACION 2026'.")
+                st.warning(f"No hay carpeta para '{emp}' en 'EMPRESAS CAPACITACION 2026'.")
         else:
-            st.info("💡 **Consejo:** Para ver los archivos (PDF/Excel), selecciona **una sola empresa** en el panel de la izquierda.")
+            st.info("Seleccione una sola empresa para ver sus documentos.")
 
 except Exception as e:
-    st.error(f"Hubo un problema al cargar el Dashboard: {e}")
+    st.error(f"Error: {e}")
