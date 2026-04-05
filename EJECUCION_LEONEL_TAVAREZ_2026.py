@@ -12,7 +12,7 @@ from googleapiclient.http import MediaIoBaseUpload
 try:
     from fillpdf import fillpdfs
 except ImportError:
-    st.error("Por favor, añade 'fillpdf' a tu archivo requirements.txt")
+    st.error("Añade 'fillpdf' y 'xlsxwriter' a requirements.txt")
 
 # --- IDENTIDAD VISUAL INFOTEP ---
 COLOR_AZUL = "#0056b3"
@@ -20,7 +20,7 @@ COLOR_AMARILLO = "#ffcc00"
 COLOR_VERDE = "#28a745"
 COLOR_ROJO = "#dc3545"
 
-st.set_page_config(page_title="Dashboard INFOTEP - Leonel Tavarez", layout="wide")
+st.set_page_config(page_title="Gestión INFOTEP - Leonel Tavarez", layout="wide")
 
 # --- CONFIGURACIÓN DRIVE ---
 PARENT_FOLDER_ID = "19d0FCdGHQp9wG0DNBLgH5kPtG5rAGJ9r"
@@ -39,15 +39,24 @@ def get_drive_service():
         return None
 
 def upload_to_drive(content_bytes, file_name, folder_id):
+    """NUEVA ESTRATEGIA: Subida forzada para evitar error de cuota 403"""
     service = get_drive_service()
-    file_metadata = {'name': file_name, 'parents': [folder_id]}
-    media = MediaIoBaseUpload(BytesIO(content_bytes), mimetype='application/pdf')
-    service.files().create(
-        body=file_metadata, 
-        media_body=media, 
-        fields='id',
-        supportsAllDrives=True
-    ).execute()
+    file_metadata = {
+        'name': file_name,
+        'parents': [folder_id]
+    }
+    media = MediaIoBaseUpload(BytesIO(content_bytes), mimetype='application/pdf', resumable=True)
+    
+    # La clave es supportsAllDrives y el uso de campos específicos
+    try:
+        service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id',
+            supportsAllDrives=True # Permite usar el espacio de la carpeta destino
+        ).execute()
+    except Exception as e:
+        st.sidebar.error(f"Fallo crítico en Drive: {e}")
 
 def get_folder_id(empresa_name):
     service = get_drive_service()
@@ -69,7 +78,7 @@ def list_files_in_folder(empresa_name):
         return res.get('files', [])
     except: return []
 
-# --- PROCESAMIENTO DE DATOS ---
+# --- CARGA DE DATOS ---
 @st.cache_data(ttl=0)
 def load_data():
     url = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/gviz/tq?tqx=out:csv"
@@ -79,114 +88,117 @@ def load_data():
     df['FECHA_INICIO'] = pd.to_datetime(df['FECHA_INICIO'], dayfirst=True, errors='coerce')
     df['FECHA_TERMINO'] = pd.to_datetime(df['FECHA_TERMINO'], dayfirst=True, errors='coerce')
     
-    # Conversión a enteros para limpieza visual
+    # Limpieza de decimales para gráficos
     columnas_num = ['HORAS_EJECUTADAS', 'TOTAL_ACCIONES', 'OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']
     for col in columnas_num:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
     df['PARTICIPANTES'] = df['OPERARIOS'] + df['MANDOS_MEDIOS'] + df['GERENTES']
     return df
 
+# --- LÓGICA DE INTERFAZ ---
 try:
     df_orig = load_data()
-    
-    # --- BARRA LATERAL (SIDEBAR) ---
-    st.sidebar.image("https://www.infotep.gob.do/images/logo_infotep.png", width=150) # Opcional: Logo
     st.sidebar.title("🛠️ Panel de Control")
     
-    # 1. Generador de Cronogramas
-    st.sidebar.subheader("📄 Cronogramas PDF")
-    emp_pdf = st.sidebar.selectbox("Empresa para Cronograma", options=sorted(df_orig["EMPRESA"].unique()))
-    if st.sidebar.button("🚀 Generar y Subir"):
-        df_cerrados = df_orig[(df_orig["EMPRESA"] == emp_pdf) & (df_orig["ESTADO"] == "Cerrado")]
-        acciones = df_cerrados['ACCION_FORMATIVA'].tolist()
+    # 1. GENERADOR DE CRONOGRAMAS (Integrado y corregido)
+    st.sidebar.subheader("📄 Generar Cronograma")
+    emp_pdf = st.sidebar.selectbox("Empresa Destino", options=sorted(df_orig["EMPRESA"].unique()))
+    
+    if st.sidebar.button("🚀 Generar y Subir a Drive"):
+        # Filtro como en tu script local
+        df_emp = df_orig[(df_orig["EMPRESA"] == emp_pdf) & (df_orig["ESTADO"] == "Cerrado")]
+        acciones = df_emp['ACCION_FORMATIVA'].unique().tolist()
+        
         if not acciones:
-            st.sidebar.warning(f"Sin cursos 'Cerrados' en {emp_pdf}")
+            st.sidebar.warning("No hay acciones 'Cerradas' para esta empresa.")
         else:
             f_id = get_folder_id(emp_pdf)
             if f_id:
+                # Lógica de 8 por página para no saturar la plantilla
                 lote_size = 8
                 for i in range(0, len(acciones), lote_size):
-                    lote = acciones[i:i+lote_size]
+                    lote = acciones[i : i + lote_size]
                     p = (i // lote_size) + 1
-                    datos = {'txt_empresa': emp_pdf, 'txt_regional': 'Cibao Norte'}
+                    datos_pdf = {'txt_empresa': emp_pdf, 'txt_regional': 'Cibao Norte'}
                     for idx, act in enumerate(lote):
-                        datos[f'accion_{idx+1}'] = act
+                        datos_pdf[f'accion_{idx+1}'] = act
                     
-                    t_name = f"temp_{p}.pdf"
-                    fillpdfs.write_fillable_pdf(PLANTILLA_PDF, t_name, datos)
-                    with open(t_name, "rb") as f:
-                        upload_to_drive(f.read(), f"Cronograma_{emp_pdf}_Parte_{p}.pdf", f_id)
-                    os.remove(t_name)
-                st.sidebar.success("✅ Cronogramas en Drive.")
-            else: st.sidebar.error("Carpeta no encontrada.")
+                    nombre_temp = f"temp_cron_{p}.pdf"
+                    fillpdfs.write_fillable_pdf(PLANTILLA_PDF, nombre_temp, datos_pdf)
+                    
+                    with open(nombre_temp, "rb") as f:
+                        upload_to_drive(f.read(), f"Cronograma_{emp_pdf}_P{p}.pdf", f_id)
+                    os.remove(nombre_temp)
+                st.sidebar.success("✅ ¡Proceso masivo completado en Drive!")
+            else:
+                st.sidebar.error("Error: No existe la carpeta de la empresa en Drive.")
 
     st.sidebar.divider()
     
-    # 2. Filtros de Vista
-    st.sidebar.subheader("🔍 Filtros de Visualización")
-    f_empresa = st.sidebar.multiselect("Empresas", options=sorted(df_orig["EMPRESA"].unique()))
-    f_estado = st.sidebar.multiselect("Estados", options=sorted(df_orig["ESTADO"].unique()), default=df_orig["ESTADO"].unique())
+    # 2. FILTROS DE VISUALIZACIÓN
+    st.sidebar.subheader("🔍 Filtros de Gráficos")
+    f_empresa = st.sidebar.multiselect("Filtrar Empresa(s)", options=sorted(df_orig["EMPRESA"].unique()))
+    f_estado = st.sidebar.multiselect("Filtrar Estado(s)", options=sorted(df_orig["ESTADO"].unique()), default=df_orig["ESTADO"].unique())
     
-    df_filtrado = df_orig[df_orig["ESTADO"].isin(f_estado)]
+    df_v = df_orig[df_orig["ESTADO"].isin(f_estado)]
     if f_empresa:
-        df_filtrado = df_filtrado[df_filtrado["EMPRESA"].isin(f_empresa)]
+        df_v = df_v[df_v["EMPRESA"].isin(f_empresa)]
 
-    # --- PANTALLA PRINCIPAL ---
+    # --- PESTAÑAS ---
     tabs = st.tabs(["📊 Dashboard Ejecutivo", "📋 Tabla de Datos", "📂 Repositorio Drive"])
 
     with tabs[0]:
         st.title("Control de Ejecución 2026")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Horas Totales", f"{int(df_filtrado['HORAS_EJECUTADAS'].sum()):,}")
-        c2.metric("Acciones Formativas", f"{int(df_filtrado['TOTAL_ACCIONES'].sum()):,}")
-        c3.metric("Participantes", f"{int(df_filtrado['PARTICIPANTES'].sum()):,}")
+        # Métricas
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Horas Ejecutadas", f"{int(df_v['HORAS_EJECUTADAS'].sum()):,}")
+        m2.metric("Acciones Formativas", f"{int(df_v['TOTAL_ACCIONES'].sum()):,}")
+        m3.metric("Total Participantes", f"{int(df_v['PARTICIPANTES'].sum()):,}")
         
         st.divider()
-        col_izq, col_der = st.columns(2)
-        
-        with col_izq:
-            st.subheader("Alcance por Empresa")
-            df_g1 = df_filtrado.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
+        g1, g2 = st.columns(2)
+        with g1:
+            st.subheader("Alcance Operativo")
+            df_g1 = df_v.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
             fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'], 
                           barmode='group', text_auto='d',
                           color_discrete_map={'HORAS_EJECUTADAS': COLOR_AZUL, 'PARTICIPANTES': COLOR_AMARILLO, 'TOTAL_ACCIONES': COLOR_VERDE})
             st.plotly_chart(fig1, use_container_width=True)
-
-        with col_der:
-            st.subheader("Distribución de Niveles")
-            df_g2 = df_filtrado.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index()
+        with g2:
+            st.subheader("Niveles Jerárquicos")
+            df_g2 = df_v.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index()
             fig2 = px.bar(df_g2, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'], 
                           barmode='stack', text_auto='d',
                           color_discrete_map={'OPERARIOS': COLOR_AZUL, 'MANDOS_MEDIOS': COLOR_AMARILLO, 'GERENTES': COLOR_ROJO})
             st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
-        st.subheader("Detalle de Cursos")
-        # Botones de descarga
+        st.subheader("Registros Detallados")
+        # Botones de descarga (Recuperados)
         d1, d2 = st.columns(2)
-        out = BytesIO()
-        with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
-            df_filtrado.to_excel(writer, index=False, sheet_name='Data')
-        d1.download_button("📥 Descargar Excel", out.getvalue(), "Reporte_INFOTEP.xlsx", "application/vnd.ms-excel")
-        d2.download_button("📄 Descargar CSV", df_filtrado.to_csv(index=False).encode('utf-8'), "Reporte_INFOTEP.csv", "text/csv")
+        towrite = BytesIO()
+        with pd.ExcelWriter(towrite, engine='xlsxwriter') as writer:
+            df_v.to_excel(writer, index=False, sheet_name='Data')
+        d1.download_button("📥 Descargar Excel", towrite.getvalue(), "Ejecucion_Leonel.xlsx")
+        d2.download_button("📄 Descargar CSV", df_v.to_csv(index=False).encode('utf-8'), "Ejecucion_Leonel.csv")
         
-        # Tabla Formateada
-        df_tab = df_filtrado.copy()
-        df_tab['FECHA_INICIO'] = df_tab['FECHA_INICIO'].dt.strftime('%d/%m/%Y')
-        df_tab['FECHA_TERMINO'] = df_tab['FECHA_TERMINO'].dt.strftime('%d/%m/%Y')
-        st.dataframe(df_tab, use_container_width=True, hide_index=True)
+        # Tabla visual
+        df_display = df_v.copy()
+        df_display['FECHA_INICIO'] = df_display['FECHA_INICIO'].dt.strftime('%d/%m/%Y')
+        df_display['FECHA_TERMINO'] = df_display['FECHA_TERMINO'].dt.strftime('%d/%m/%Y')
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     with tabs[2]:
-        st.subheader("Archivos en Google Drive")
+        st.subheader("Archivos en Drive")
         if f_empresa and len(f_empresa) == 1:
             archivos = list_files_in_folder(f_empresa[0])
             if archivos:
                 for a in archivos:
-                    col_file, col_link = st.columns([4, 1])
-                    col_file.write(f"📄 {a['name']}")
-                    col_link.link_button("Abrir Archivo", a['webViewLink'])
-            else: st.warning("No hay archivos en la carpeta de esta empresa.")
-        else: st.info("Selecciona **una sola empresa** en el filtro lateral para ver su repositorio.")
+                    col_a, col_b = st.columns([4, 1])
+                    col_a.write(f"📄 {a['name']}")
+                    col_b.link_button("Ver en Drive", a['webViewLink'])
+            else: st.warning("Carpeta vacía.")
+        else: st.info("Filtra **una sola empresa** para ver su repositorio.")
 
 except Exception as e:
     st.error(f"Error en la aplicación: {e}")
