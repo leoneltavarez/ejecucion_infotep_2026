@@ -23,7 +23,7 @@ st.markdown(f"""
         border-radius: 10px;
         padding: 20px;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-        text-align: center; /* CENTRALIZACIÓN TOTAL */
+        text-align: center;
     }}
     .metric-title {{
         color: #555;
@@ -74,10 +74,9 @@ def list_files_in_folder(empresa_name):
         return res.get('files', [])
     except: return []
 
-# --- CARGA DE DATOS (SIN CACHE PARA ACTUALIZACIÓN AUTOMÁTICA) ---
-@st.cache_data(ttl=0) # <--- CRÍTICO: ttl=0 significa que siempre lee lo nuevo del Drive
+# --- CARGA DE DATOS (ACTUALIZACIÓN AUTOMÁTICA) ---
+@st.cache_data(ttl=0) 
 def load_data():
-    # URL de tu CSV publicado desde el Excel de Drive
     url = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/gviz/tq?tqx=out:csv"
     df = pd.read_csv(url)
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
@@ -95,7 +94,6 @@ try:
     df_orig = load_data()
     st.sidebar.title("🛠️ Panel de Control")
     
-    # Botón manual de refresco por si acaso
     if st.sidebar.button("🔄 Sincronizar Base de Datos"):
         st.cache_data.clear()
         st.rerun()
@@ -108,52 +106,44 @@ try:
     if f_empresa:
         df_v = df_v[df_v["EMPRESA"].isin(f_empresa)]
 
-    # --- PESTAÑAS ---
+    # --- TABS ---
     t_dash, t_data, t_drive = st.tabs(["📊 Dashboard Ejecutivo", "📋 Tabla de Datos", "📂 Repositorio Drive"])
 
     with t_dash:
         st.title("Control de Ejecución 2026")
         
-        # Métricas Centralizadas con la línea azul
+        # Cálculos limpios para las métricas
+        h_total = f"{int(df_v['HORAS_EJECUTADAS'].sum()):,}"
+        a_total = f"{int(df_v['TOTAL_ACCIONES'].sum()):,}"
+        p_total = f"{int(df_v['PARTICIPANTES'].sum()):,}"
+
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.markdown(f'''<div class="metric-container">
-                            <div class="metric-title">Horas Totales</div>
-                            <div class="metric-value">{int(df_v["HORAS_EJECUTADAS"].sum()):,}</div>
-                        </div>''', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-container"><div class="metric-title">Horas Totales</div><div class="metric-value">{h_total}</div></div>', unsafe_allow_html=True)
         with c2:
-            st.markdown(f'''<div class="metric-container">
-                            <div class="metric-title">Acciones Formativas</div>
-                            <div class="metric-value">{int(df_v["TOTAL_ACCIONES"].sum()):,}</div>
-                        </div>''', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-container"><div class="metric-title">Acciones Formativas</div><div class="metric-value">{a_total}</div></div>', unsafe_allow_html=True)
         with c3:
-            st.markdown(f'''<div class="metric-container">
-                            <div class="metric-title">Total Participantes</div>
-                            <div class="metric-value">{int(df_v["PARTICIPANTES"].sum()):, }</div>
-                        </div>''', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-container"><div class="metric-title">Total Participantes</div><div class="metric-value">{p_total}</div></div>', unsafe_allow_html=True)
         
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("Alcance Operativo por Empresa")
+            st.subheader("Alcance Operativo")
             df_g1 = df_v.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
-            fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'], 
-                          barmode='group', text_auto='d',
+            fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'], barmode='group', text_auto='d',
                           color_discrete_map={'HORAS_EJECUTADAS': COLOR_AZUL, 'PARTICIPANTES': COLOR_AMARILLO, 'TOTAL_ACCIONES': COLOR_VERDE})
             st.plotly_chart(fig1, use_container_width=True)
-            
         with col2:
-            st.subheader("Distribución de Niveles")
+            st.subheader("Niveles Jerárquicos")
             df_g2 = df_v.groupby('EMPRESA')[['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']].sum().reset_index()
-            fig2 = px.bar(df_g2, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'], 
-                          barmode='stack', text_auto='d',
+            fig2 = px.bar(df_g2, x='EMPRESA', y=['OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES'], barmode='stack', text_auto='d',
                           color_discrete_map={'OPERARIOS': COLOR_AZUL, 'MANDOS_MEDIOS': COLOR_AMARILLO, 'GERENTES': COLOR_ROJO})
             st.plotly_chart(fig2, use_container_width=True)
 
     with t_data:
         st.subheader("Exportar Información")
-        
         d_c1, d_c2 = st.columns(2)
+        
         # Excel
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -172,13 +162,13 @@ try:
             archivos = list_files_in_folder(f_empresa[0])
             if archivos:
                 for a in archivos:
-                    col_file, col_link = st.columns([4, 1])
-                    col_file.write(f"📄 {a['name']}")
-                    col_link.link_button("Abrir Archivo", a['webViewLink'])
+                    col_f, col_l = st.columns([4, 1])
+                    col_f.write(f"📄 {a['name']}")
+                    col_l.link_button("Abrir", a['webViewLink'])
             else:
-                st.warning("No se encontraron archivos para esta empresa.")
+                st.warning("No hay archivos para esta empresa.")
         else:
-            st.info("Selecciona una empresa en el filtro lateral para ver sus archivos en Drive.")
+            st.info("Selecciona una empresa para ver sus archivos.")
 
 except Exception as e:
-    st.error(f"Se detectó un problema técnico: {e}")
+    st.error(f"Error técnico: {e}")
