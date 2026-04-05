@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import json
+from io import BytesIO
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -13,7 +14,20 @@ COLOR_ROJO = "#dc3545"
 
 st.set_page_config(page_title="Dashboard INFOTEP - Leonel Tavarez", layout="wide")
 
-# --- CONFIGURACIÓN DRIVE (Solo para Lectura/Repositorio) ---
+# --- ESTILO PERSONALIZADO (Línea azul y elegancia) ---
+st.markdown(f"""
+    <style>
+    .metric-card {{
+        background-color: #f8f9fa;
+        border-top: 5px solid {COLOR_AZUL};
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+    }}
+    </style>
+""", unsafe_allow_html=True)
+
+# --- CONFIGURACIÓN DRIVE ---
 PARENT_FOLDER_ID = "19d0FCdGHQp9wG0DNBLgH5kPtG5rAGJ9r"
 
 def get_drive_service():
@@ -24,7 +38,7 @@ def get_drive_service():
             info["private_key"] = info["private_key"].replace("\\n", "\n")
         creds = service_account.Credentials.from_service_account_info(info)
         return build('drive', 'v3', credentials=creds)
-    except Exception:
+    except:
         return None
 
 def get_folder_id(empresa_name):
@@ -57,6 +71,7 @@ def load_data():
     df['EMPRESA'] = df['EMPRESA'].astype(str).str.strip()
     df['ESTADO'] = df['ESTADO'].astype(str).str.strip()
     
+    # Conversión a enteros (Adiós al .0)
     columnas_num = ['HORAS_EJECUTADAS', 'TOTAL_ACCIONES', 'OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']
     for col in columnas_num:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
@@ -68,24 +83,29 @@ try:
     df_orig = load_data()
     st.sidebar.title("🛠️ Panel de Control")
     
-    st.sidebar.subheader("🔍 Filtros de Visualización")
-    f_empresa = st.sidebar.multiselect("Filtrar Empresa(s)", options=sorted(df_orig["EMPRESA"].unique()))
-    f_estado = st.sidebar.multiselect("Filtrar Estado(s)", options=sorted(df_orig["ESTADO"].unique()), default=df_orig["ESTADO"].unique())
+    # Filtros
+    st.sidebar.subheader("🔍 Filtros")
+    f_empresa = st.sidebar.multiselect("Empresa(s)", options=sorted(df_orig["EMPRESA"].unique()))
+    f_estado = st.sidebar.multiselect("Estado(s)", options=sorted(df_orig["ESTADO"].unique()), default=df_orig["ESTADO"].unique())
     
-    # Aplicación de filtros
     df_v = df_orig[df_orig["ESTADO"].isin(f_estado)]
     if f_empresa:
         df_v = df_v[df_v["EMPRESA"].isin(f_empresa)]
 
-    # --- PESTAÑAS ---
+    # --- TABS ---
     t_dash, t_data, t_drive = st.tabs(["📊 Dashboard Ejecutivo", "📋 Tabla de Datos", "📂 Repositorio Drive"])
 
     with t_dash:
         st.title("Control de Ejecución 2026")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Horas Totales", f"{int(df_v['HORAS_EJECUTADAS'].sum()):,}")
-        m2.metric("Acciones Formativas", f"{int(df_v['TOTAL_ACCIONES'].sum()):,}")
-        m3.metric("Total Participantes", f"{int(df_v['PARTICIPANTES'].sum()):,}")
+        
+        # Métricas con "Línea Azul" elegante
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f'<div class="metric-card"><h3>Horas Totales</h3><h2>{int(df_v["HORAS_EJECUTADAS"].sum()):,}</h2></div>', unsafe_allow_html=True)
+        with c2:
+            st.markdown(f'<div class="metric-card"><h3>Acciones Formativas</h3><h2>{int(df_v["TOTAL_ACCIONES"].sum()):,}</h2></div>', unsafe_allow_html=True)
+        with c3:
+            st.markdown(f'<div class="metric-card"><h3>Total Participantes</h3><h2>{int(df_v["PARTICIPANTES"].sum()):,}</h2></div>', unsafe_allow_html=True)
         
         st.divider()
         g1, g2 = st.columns(2)
@@ -105,7 +125,31 @@ try:
             st.plotly_chart(fig2, use_container_width=True)
 
     with t_data:
-        st.subheader("Registros Detallados")
+        st.subheader("Descarga de Reportes")
+        
+        # --- SECCIÓN DE DESCARGAS (Restaurada) ---
+        d_col1, d_col2 = st.columns(2)
+        
+        # Generar Excel en memoria
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_v.to_excel(writer, index=False, sheet_name='Reporte')
+        
+        d_col1.download_button(
+            label="📥 Descargar en Formato Excel",
+            data=output.getvalue(),
+            file_name="Reporte_Ejecucion_INFOTEP.xlsx",
+            mime="application/vnd.ms-excel"
+        )
+        
+        d_col2.download_button(
+            label="📄 Descargar en Formato CSV",
+            data=df_v.to_csv(index=False).encode('utf-8'),
+            file_name="Reporte_Ejecucion_INFOTEP.csv",
+            mime="text/csv"
+        )
+        
+        st.divider()
         st.dataframe(df_v, use_container_width=True, hide_index=True)
 
     with t_drive:
@@ -113,15 +157,14 @@ try:
         if f_empresa and len(f_empresa) == 1:
             archivos = list_files_in_folder(f_empresa[0])
             if archivos:
-                st.write(f"Mostrando archivos para: **{f_empresa[0]}**")
                 for a in archivos:
                     col_a, col_b = st.columns([4, 1])
                     col_a.write(f"📄 {a['name']}")
                     col_b.link_button("Abrir", a['webViewLink'])
             else:
-                st.warning("No se encontraron archivos en la carpeta de esta empresa.")
+                st.warning("No hay archivos para esta empresa.")
         else:
-            st.info("💡 Por favor, selecciona **una sola empresa** en el filtro de la izquierda para ver su repositorio de Drive.")
+            st.info("Selecciona una sola empresa para ver sus archivos.")
 
 except Exception as e:
-    st.error(f"Error en la aplicación: {e}")
+    st.error(f"Error: {e}")
