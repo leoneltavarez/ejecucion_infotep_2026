@@ -44,14 +44,25 @@ def upload_to_drive(content_bytes, file_name, folder_id):
     service = get_drive_service()
     file_metadata = {'name': file_name, 'parents': [folder_id]}
     media = MediaIoBaseUpload(BytesIO(content_bytes), mimetype='application/pdf')
-    service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    
+    # supportsAllDrives=True soluciona el error de "Storage Quota"
+    service.files().create(
+        body=file_metadata, 
+        media_body=media, 
+        fields='id',
+        supportsAllDrives=True 
+    ).execute()
 
 def list_files_in_folder(empresa_name):
     try:
         service = get_drive_service()
         f_id = get_folder_id(empresa_name)
         if not f_id: return []
-        res = service.files().list(q=f"'{f_id}' in parents and trashed = false", fields="files(id, name, webViewLink)").execute()
+        res = service.files().list(
+            q=f"'{f_id}' in parents and trashed = false", 
+            fields="files(id, name, webViewLink)",
+            supportsAllDrives=True
+        ).execute()
         return res.get('files', [])
     except: return []
 
@@ -63,11 +74,14 @@ def load_data():
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
     if 'ESTADO' in df.columns:
         df['ESTADO'] = df['ESTADO'].astype(str).str.strip()
+    
     df['FECHA_INICIO'] = pd.to_datetime(df['FECHA_INICIO'], dayfirst=True, errors='coerce')
     df['FECHA_TERMINO'] = pd.to_datetime(df['FECHA_TERMINO'], dayfirst=True, errors='coerce')
+    
     columnas_num = ['HORAS_EJECUTADAS', 'TOTAL_ACCIONES', 'OPERARIOS', 'MANDOS_MEDIOS', 'GERENTES']
     for col in columnas_num:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+    
     df['PARTICIPANTES'] = df['OPERARIOS'] + df['MANDOS_MEDIOS'] + df['GERENTES']
     return df
 
@@ -75,11 +89,12 @@ try:
     df_orig = load_data()
     st.sidebar.title("🛠️ Gestión INFOTEP")
     
-    # --- GENERADOR DE CRONOGRAMAS ---
+    # --- GENERADOR DE CRONOGRAMAS (8 POR HOJA) ---
     st.sidebar.subheader("📄 Generador de Cronogramas")
     empresa_cronograma = st.sidebar.selectbox("Empresa para PDF", options=sorted(df_orig["EMPRESA"].unique()))
     
     if st.sidebar.button("🚀 Generar y Subir a Drive"):
+        # Filtro estricto: Solo Cerrados
         df_cerrados = df_orig[(df_orig["EMPRESA"] == empresa_cronograma) & (df_orig["ESTADO"] == "Cerrado")]
         acciones = df_cerrados['ACCION_FORMATIVA'].tolist()
         
@@ -103,9 +118,9 @@ try:
                     with open(temp_name, "rb") as f:
                         upload_to_drive(f.read(), f"Cronograma_{empresa_cronograma}_P{parte}.pdf", f_id)
                     os.remove(temp_name)
-                st.sidebar.success(f"✅ ¡Hecho! Cronogramas en Drive.")
+                st.sidebar.success(f"✅ ¡Éxito! Cronogramas en Drive.")
 
-    # --- FILTROS ---
+    # --- FILTROS DE VISTA ---
     f_empresa = st.sidebar.multiselect("Filtrar Empresa", options=sorted(df_orig["EMPRESA"].unique()))
     f_estado = st.sidebar.multiselect("Filtrar Estado", options=sorted(df_orig["ESTADO"].unique()), default=df_orig["ESTADO"].unique())
     
@@ -126,7 +141,7 @@ try:
         with col1:
             df_g1 = df.groupby('EMPRESA')[['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES']].sum().reset_index()
             fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS_EJECUTADAS', 'PARTICIPANTES', 'TOTAL_ACCIONES'], 
-                          barmode='group', text_auto='d',
+                          barmode='group', text_auto='d', # 'd' para enteros
                           color_discrete_map={'HORAS_EJECUTADAS': '#0056b3', 'PARTICIPANTES': '#ffcc00', 'TOTAL_ACCIONES': '#28a745'})
             st.plotly_chart(fig1, use_container_width=True)
         with col2:
@@ -138,12 +153,13 @@ try:
 
     with tabs[1]:
         st.subheader("Registros Detallados")
+        # Botones de descarga
         d1, d2 = st.columns(2)
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=False, sheet_name='Data')
-        d1.download_button("📥 Excel", output.getvalue(), "Reporte.xlsx", "application/vnd.ms-excel")
-        d2.download_button("📄 CSV", df.to_csv(index=False).encode('utf-8'), "Reporte.csv", "text/csv")
+        d1.download_button("📥 Descargar Excel", output.getvalue(), "Reporte.xlsx", "application/vnd.ms-excel")
+        d2.download_button("📄 Descargar CSV", df.to_csv(index=False).encode('utf-8'), "Reporte.csv", "text/csv")
         
         df_v = df.copy()
         df_v['FECHA_INICIO'] = df_v['FECHA_INICIO'].dt.strftime('%d/%m/%Y')
@@ -162,4 +178,4 @@ try:
             else: st.warning("Carpeta vacía.")
         else: st.info("Filtra una sola empresa para ver sus archivos.")
 
-except Exception as e: st.error(f"Error: {e}")
+except Exception as e: st.error(f"Error general: {e}")
