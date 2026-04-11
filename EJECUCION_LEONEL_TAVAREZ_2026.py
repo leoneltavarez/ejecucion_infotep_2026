@@ -44,7 +44,6 @@ def list_files_in_folder(empresa_name):
         results = service.files().list(q=query, fields="files(id, name)").execute()
         items = results.get('files', [])
         if not items: return []
-        
         f_id = items[0]['id']
         res = service.files().list(q=f"'{f_id}' in parents and trashed = false", fields="files(name, webViewLink)").execute()
         return res.get('files', [])
@@ -81,11 +80,13 @@ def load_and_merge_data():
         df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
-        for col in ['EMPRESA', 'FACILITADOR', 'ACCION FORMATIVA']:
-            df_final[col] = df_final[col].astype(str).replace(['nan', 'None'], 'S/D').str.strip()
+        for col in ['EMPRESA', 'FACILITADOR', 'ACCION FORMATIVA', 'RNC']:
+            if col in df_final.columns:
+                df_final[col] = df_final[col].astype(str).replace(['nan', 'None'], 'S/D').str.strip()
 
         cols_num = ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS', 'HORAS FALTAN']
         for col in cols_num:
+            if col not in df_final.columns: df_final[col] = 0
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0).astype(int)
 
         df_final['PARTICIPANTES'] = df_final['OPERARIOS'] + df_final['MANDOS MEDIOS'] + df_final['GERENTES']
@@ -149,17 +150,18 @@ if not df.empty:
         cd1, cd2, _ = st.columns([1, 1, 4])
         with cd1:
             csv = df_f.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", csv, "reporte.csv", "text/csv")
+            st.download_button("📥 Descargar CSV", csv, "reporte_leonel.csv", "text/csv")
         with cd2:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_f.drop(columns=['FECHA_DT']).to_excel(writer, index=False)
-            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
+            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte_leonel.xlsx")
 
+        # COLUMNAS ACTUALIZADAS: INCLUYE RNC Y GERENTES
         columnas_visibles = [
-            'EMPRESA', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
+            'EMPRESA', 'RNC', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
             'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 
-            'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'PARTICIPANTES'
+            'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
         ]
         st.dataframe(df_f[columnas_visibles], use_container_width=True, hide_index=True)
 
@@ -171,13 +173,12 @@ if not df.empty:
                 st.write(f"Archivos para **{f_empresa[0]}**:")
                 st.markdown("---")
                 for a in archivos:
-                    # USAMOS COLUMNAS PARA SEPARAR NOMBRE Y BOTÓN
                     col_file, col_btn = st.columns([0.7, 0.3])
                     with col_file:
                         st.write(f"📄 {a['name']}")
                     with col_btn:
                         st.link_button("Abrir Archivo", a['webViewLink'], use_container_width=True)
             else:
-                st.warning("Carpeta vacía.")
+                st.warning("Carpeta vacía o sin acceso.")
         else:
             st.info("ℹ️ Selecciona **una sola empresa** para gestionar sus documentos.")
