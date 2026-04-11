@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 C_AZUL, C_AMARILLO, C_VERDE, C_ROJO = "#0056b3", "#ffcc00", "#28a745", "#dc3545"
 st.set_page_config(page_title="Dashboard Maestro - Leonel Tavarez", layout="wide")
 
-# --- CONFIGURACIÓN DRIVE (Gestión de Archivos) ---
+# --- CONFIGURACIÓN DRIVE ---
 PARENT_FOLDER_ID = "19d0FCdGHQp9wG0DNBLgH5kPtG5rAGJ9r"
 
 def get_drive_service():
@@ -48,24 +48,24 @@ def load_and_merge_data():
         df_b.columns = [c.strip().upper().replace("_", " ") for c in df_b.columns]
         df_a.columns = [c.strip().upper().replace("_", " ") for c in df_a.columns]
         
-        # Limpieza de llaves de unión
+        # Limpieza de llaves
         df_b['CODIGO CURSO'] = df_b['CODIGO CURSO'].astype(str).str.strip()
         df_a['CODIGO CURSO'] = df_a['CODIGO CURSO'].astype(str).str.strip()
         
-        # Unión por Código de Curso (Infalible)
+        # Unión (Merge)
         if 'FACILITADOR' in df_a.columns:
             df_a_sub = df_a[['CODIGO CURSO', 'FACILITADOR']].drop_duplicates(subset=['CODIGO CURSO'])
             df_final = pd.merge(df_b, df_a_sub, on='CODIGO CURSO', how='left')
         else:
             df_final = df_b
 
-        # Limpieza de textos y eliminación de vacíos para los filtros
+        # Manejo de vacíos: Convertimos a String y llenamos con "SIN ESPECIFICAR"
         columnas_texto = ['EMPRESA', 'FACILITADOR', 'ESTADO', 'ACCION FORMATIVA']
         for col in columnas_texto:
             if col in df_final.columns:
-                df_final[col] = df_final[col].fillna("PENDIENTE").astype(str).str.strip()
+                df_final[col] = df_final[col].astype(str).replace(['nan', 'None', ''], 'SIN ESPECIFICAR').str.strip()
 
-        # Asegurar valores numéricos para KPIs y Gráficos
+        # Asegurar números
         for col in ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS']:
             if col not in df_final.columns: df_final[col] = 0
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0).astype(int)
@@ -82,17 +82,19 @@ try:
     df = load_and_merge_data()
     
     if not df.empty:
-        # SIDEBAR
         st.sidebar.header("🛠️ Filtros de Control")
         
-        def safe_sorted(col_name):
-            values = [x for x in df[col_name].unique() if x != "PENDIENTE"]
-            return sorted([str(x) for x in values])
+        # Función de ordenamiento seguro
+        def get_options(col_name):
+            return sorted(df[col_name].unique().tolist())
 
-        f_empresa = st.sidebar.multiselect("Empresa", safe_sorted("EMPRESA"))
-        f_curso = st.sidebar.multiselect("Acción Formativa", safe_sorted("ACCION FORMATIVA"))
-        f_facilitador = st.sidebar.multiselect("Facilitador", safe_sorted("FACILITADOR"))
-        f_estado = st.sidebar.multiselect("Estado", safe_sorted("ESTADO"), default=df["ESTADO"].unique().tolist())
+        f_empresa = st.sidebar.multiselect("Empresa", get_options("EMPRESA"))
+        f_curso = st.sidebar.multiselect("Acción Formativa", get_options("ACCION FORMATIVA"))
+        f_facilitador = st.sidebar.multiselect("Facilitador", get_options("FACILITADOR"))
+        
+        # El "default" ahora es dinámico para que coincida siempre con las opciones
+        opciones_estado = get_options("ESTADO")
+        f_estado = st.sidebar.multiselect("Estado", opciones_estado, default=opciones_estado)
 
         # Aplicar filtros
         df_f = df[df["ESTADO"].isin(f_estado)]
@@ -106,20 +108,16 @@ try:
         with t1:
             st.title("Control de Gestión Leonel Tavarez 2026")
             
-            # --- KPIs (Cuadros de Información) ---
+            # KPIs
             k1, k2, k3, k4 = st.columns(4)
-            with k1:
-                st.metric("Total Horas", f"{df_f['HORAS EJECUTADAS'].sum():,}")
-            with k2:
-                st.metric("Participantes", f"{df_f['PARTICIPANTES'].sum():,}")
-            with k3:
-                st.metric("Acciones Formativas", f"{len(df_f):,}")
-            with k4:
-                st.metric("Empresas", f"{df_f['EMPRESA'].nunique()}")
+            with k1: st.metric("Total Horas", f"{df_f['HORAS EJECUTADAS'].sum():,}")
+            with k2: st.metric("Participantes", f"{df_f['PARTICIPANTES'].sum():,}")
+            with k3: st.metric("Acciones Formativas", f"{len(df_f):,}")
+            with k4: st.metric("Empresas Impactadas", f"{df_f['EMPRESA'].nunique()}")
 
             st.markdown("---")
 
-            # Gráfico 1: Ejecución
+            # Gráficos
             st.subheader("1. Alcance Operativo por Empresa")
             df_g1 = df_f.copy()
             df_g1['CURSOS'] = 1
@@ -136,7 +134,7 @@ try:
                               color_discrete_map={'OPERARIOS': C_AZUL, 'MANDOS MEDIOS': C_AMARILLO, 'GERENTES': C_ROJO})
                 st.plotly_chart(fig2, use_container_width=True)
             with col_b:
-                st.subheader("3. Productividad por Facilitador")
+                st.subheader("3. Productividad Facilitador")
                 df_g3 = df_f.groupby('FACILITADOR').size().reset_index(name='TOTAL')
                 fig3 = px.bar(df_g3, x='FACILITADOR', y='TOTAL', text_auto=True, color_discrete_sequence=[C_AZUL])
                 st.plotly_chart(fig3, use_container_width=True)
@@ -150,7 +148,7 @@ try:
                 archivos = list_files_in_folder(f_empresa[0])
                 if archivos:
                     for a in archivos: st.link_button(f"📄 Abrir {a['name']}", a['webViewLink'])
-                else: st.warning("Carpeta sin archivos.")
+                else: st.warning("Carpeta vacía.")
             else: st.info("Selecciona una empresa para ver sus documentos.")
 
 except Exception as e:
