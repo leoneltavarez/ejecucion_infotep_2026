@@ -5,11 +5,11 @@ import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- ESTÉTICA CORPORATIVA ---
+# --- CONFIGURACIÓN ESTÉTICA ---
 C_AZUL, C_AMARILLO, C_VERDE, C_ROJO = "#0056b3", "#ffcc00", "#28a745", "#dc3545"
 st.set_page_config(page_title="Dashboard Maestro - Leonel Tavarez", layout="wide")
 
-# --- CONFIGURACIÓN DRIVE (Pestaña Repositorio) ---
+# --- CONEXIÓN DRIVE ---
 PARENT_FOLDER_ID = "19d0FCdGHQp9wG0DNBLgH5kPtG5rAGJ9r"
 
 def get_drive_service():
@@ -34,7 +34,7 @@ def list_files_in_folder(empresa_name):
         return res.get('files', [])
     except: return []
 
-# --- CARGA E INTEGRACIÓN DE DATOS ---
+# --- MOTOR DE DATOS (UNIÓN Y LIMPIEZA) ---
 @st.cache_data(ttl=0)
 def load_and_merge_data():
     url_base = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/export?format=csv"
@@ -44,28 +44,31 @@ def load_and_merge_data():
         df_b = pd.read_csv(url_base)
         df_a = pd.read_csv(url_acad)
 
-        # Normalizar encabezados (quitar espacios y guiones)
+        # 1. Estandarizar encabezados
         df_b.columns = [c.strip().upper().replace("_", " ") for c in df_b.columns]
         df_a.columns = [c.strip().upper().replace("_", " ") for c in df_a.columns]
         
-        # Preparar unión por Código de Curso
+        # 2. Limpieza de llaves de unión (Código Curso)
         df_b['CODIGO CURSO'] = df_b['CODIGO CURSO'].astype(str).str.strip()
         df_a['CODIGO CURSO'] = df_a['CODIGO CURSO'].astype(str).str.strip()
         
-        # Merge para traer al Facilitador
+        # 3. Merge (Unión)
         if 'FACILITADOR' in df_a.columns:
             df_a_sub = df_a[['CODIGO CURSO', 'FACILITADOR']].drop_duplicates(subset=['CODIGO CURSO'])
             df_final = pd.merge(df_b, df_a_sub, on='CODIGO CURSO', how='left')
         else:
             df_final = df_b
 
-        # LIMPIEZA TOTAL: Convertir todo a string y manejar nulos
-        columnas_texto = ['EMPRESA', 'FACILITADOR', 'ESTADO', 'ACCION FORMATIVA']
-        for col in columnas_texto:
+        # 4. LIMPIEZA ANT-ERROR CRÍTICA: Forzar STR y quitar NaNs
+        columnas_filtro = ['EMPRESA', 'FACILITADOR', 'ESTADO', 'ACCION FORMATIVA']
+        for col in columnas_filtro:
             if col in df_final.columns:
-                df_final[col] = df_final[col].astype(str).replace(['nan', 'None', ''], 'S/D').str.strip()
+                # Convertimos a string y reemplazamos los nulos de pandas por un texto válido
+                df_final[col] = df_final[col].fillna("SIN ESPECIFICAR").astype(str).str.strip()
+                # Eliminar registros que pandas lee como 'nan' (texto)
+                df_final[col] = df_final[col].replace(['nan', 'None', 'NaN'], 'SIN ESPECIFICAR')
 
-        # Asegurar números para cálculos
+        # 5. Asegurar números para KPIs y Gráficos
         cols_num = ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS']
         for col in cols_num:
             if col not in df_final.columns: df_final[col] = 0
@@ -75,7 +78,7 @@ def load_and_merge_data():
         
         return df_final
     except Exception as e:
-        st.error(f"Error cargando datos: {e}")
+        st.error(f"Error en carga: {e}")
         return pd.DataFrame()
 
 # --- INTERFAZ ---
@@ -84,19 +87,19 @@ try:
     
     if not df.empty:
         # SIDEBAR
-        st.sidebar.header("🛠️ Filtros de Control")
+        st.sidebar.header("🛠️ Filtros")
         
-        # Función para obtener opciones ordenadas sin errores de tipo
-        def get_sorted_opts(col):
-            opts = sorted(df[col].unique().tolist())
-            return opts
+        # Función para opciones ordenadas que garantiza que todo es texto
+        def get_safe_opts(col):
+            opts = [str(x) for x in df[col].unique()]
+            return sorted(opts)
 
-        f_empresa = st.sidebar.multiselect("Empresa", get_sorted_opts("EMPRESA"))
-        f_curso = st.sidebar.multiselect("Acción Formativa", get_sorted_opts("ACCION FORMATIVA"))
-        f_facilitador = st.sidebar.multiselect("Facilitador", get_sorted_opts("FACILITADOR"))
+        f_empresa = st.sidebar.multiselect("Empresa", get_safe_opts("EMPRESA"))
+        f_curso = st.sidebar.multiselect("Acción Formativa", get_safe_opts("ACCION FORMATIVA"))
+        f_facilitador = st.sidebar.multiselect("Facilitador", get_safe_opts("FACILITADOR"))
         
-        list_estados = get_sorted_opts("ESTADO")
-        f_estado = st.sidebar.multiselect("Estado", list_estados, default=list_estados)
+        opts_estado = get_safe_opts("ESTADO")
+        f_estado = st.sidebar.multiselect("Estado", opts_estado, default=opts_estado)
 
         # Aplicar filtros
         df_f = df[df["ESTADO"].isin(f_estado)]
@@ -110,16 +113,16 @@ try:
         with t1:
             st.title("Gestión de Capacitación Leonel Tavarez 2026")
             
-            # --- KPIs (Cuadros de Información) ---
-            k1, k2, k3, k4 = st.columns(4)
-            with k1: st.metric("Total Horas", f"{df_f['HORAS EJECUTADAS'].sum():,}")
-            with k2: st.metric("Participantes", f"{df_f['PARTICIPANTES'].sum():,}")
-            with k3: st.metric("Acciones Formativas", f"{len(df_f):,}")
-            with k4: st.metric("Empresas Impactadas", f"{df_f['EMPRESA'].nunique()}")
+            # KPIs - CUADROS DE TEXTO (INDICADORES)
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.metric("Total Horas", f"{df_f['HORAS EJECUTADAS'].sum():,}")
+            with c2: st.metric("Participantes", f"{df_f['PARTICIPANTES'].sum():,}")
+            with c3: st.metric("Acciones Formativas", f"{len(df_f):,}")
+            with c4: st.metric("Empresas Impactadas", f"{df_f['EMPRESA'].nunique()}")
 
             st.markdown("---")
 
-            # Gráfico 1: Ejecución
+            # Gráficos
             st.subheader("1. Alcance Operativo por Empresa")
             df_g1 = df_f.copy()
             df_g1['CURSOS'] = 1
@@ -128,21 +131,21 @@ try:
                           color_discrete_map={'HORAS EJECUTADAS': C_AZUL, 'PARTICIPANTES': C_AMARILLO, 'CURSOS': C_VERDE})
             st.plotly_chart(fig1, use_container_width=True)
 
-            col_a, col_b = st.columns(2)
-            with col_a:
+            cola, colb = st.columns(2)
+            with cola:
                 st.subheader("2. Distribución de Niveles")
                 df_g2 = df_f.groupby('EMPRESA')[['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES']].sum().reset_index()
                 fig2 = px.bar(df_g2, x='EMPRESA', y=['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES'], barmode='stack', text_auto='d',
                               color_discrete_map={'OPERARIOS': C_AZUL, 'MANDOS MEDIOS': C_AMARILLO, 'GERENTES': C_ROJO})
                 st.plotly_chart(fig2, use_container_width=True)
-            with col_b:
+            with colb:
                 st.subheader("3. Acciones por Facilitador")
                 df_g3 = df_f.groupby('FACILITADOR').size().reset_index(name='TOTAL')
                 fig3 = px.bar(df_g3, x='FACILITADOR', y='TOTAL', text_auto=True, color_discrete_sequence=[C_AZUL])
                 st.plotly_chart(fig3, use_container_width=True)
 
         with t2:
-            st.subheader("Registro Maestro de Acciones")
+            st.subheader("Visualización General de Datos")
             st.dataframe(df_f, use_container_width=True, hide_index=True)
 
         with t3:
@@ -150,8 +153,8 @@ try:
                 docs = list_files_in_folder(f_empresa[0])
                 if docs:
                     for d in docs: st.link_button(f"📄 Abrir {d['name']}", d['webViewLink'])
-                else: st.warning("Carpeta vacía en Drive.")
-            else: st.info("Selecciona una empresa para listar sus documentos.")
+                else: st.warning("No hay archivos registrados.")
+            else: st.info("Selecciona una empresa en el filtro para ver sus archivos.")
 
 except Exception as e:
-    st.error(f"Error Inesperado: {e}")
+    st.error(f"Error Técnico Detetado: {e}")
