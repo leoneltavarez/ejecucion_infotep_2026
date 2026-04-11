@@ -77,7 +77,7 @@ def load_and_merge_data():
         df_final['ESTADO'] = df_final['ESTADO'].astype(str).str.capitalize().str.strip()
         df_final = df_final[df_final['ESTADO'].isin(['Iniciado', 'Cerrado'])]
 
-        # Fechas y Ordenamiento
+        # Ordenamiento Cronológico
         df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
@@ -102,22 +102,18 @@ df = load_and_merge_data()
 if not df.empty:
     st.sidebar.header("🛠️ Filtros")
     
-    # 1. Filtro Empresa
+    # Lógica de cascada completa
     f_empresa = st.sidebar.multiselect("Empresa", sorted(df['EMPRESA'].unique()))
     df_f1 = df[df['EMPRESA'].isin(f_empresa)] if f_empresa else df
     
-    # 2. Filtro Facilitador (Depende de Empresa)
     f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique()))
     df_f2 = df_f1[df_f1['FACILITADOR'].isin(f_facilitador)] if f_facilitador else df_f1
     
-    # 3. Filtro Estado (Crucial para limpiar la lista de acciones formativas)
     f_estado = st.sidebar.multiselect("Estado", sorted(df_f2['ESTADO'].unique()), default=sorted(df_f2['ESTADO'].unique()))
     df_f3 = df_f2[df_f2['ESTADO'].isin(f_estado)]
     
-    # 4. Filtro Acción Formativa (Ahora sí depende de Facilitador Y Estado)
     f_curso = st.sidebar.multiselect("Acción Formativa", sorted(df_f3['ACCION FORMATIVA'].unique()))
     
-    # DataFrame Final
     df_f = df_f3[df_f3['ACCION FORMATIVA'].isin(f_curso)] if f_curso else df_f3
 
     t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Tabla de Datos", "📂 Repositorio"])
@@ -168,9 +164,9 @@ if not df.empty:
                 df_f.drop(columns=['FECHA_DT']).to_excel(writer, index=False)
             st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
 
-        # Columnas restauradas: Incluyendo Inicio y Término
+        # COLUMNAS REORDENADAS SEGÚN TU SOLICITUD
         columnas_visibles = [
-            'FECHA INICIO', 'FECHA TERMINO', 'EMPRESA', 'ACCION FORMATIVA', 
+            'EMPRESA', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
             'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 
             'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'PARTICIPANTES'
         ]
