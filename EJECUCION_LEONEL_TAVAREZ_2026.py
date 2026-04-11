@@ -58,11 +58,9 @@ def load_and_merge_data():
     try:
         df_b = pd.read_csv(url_base)
         df_a = pd.read_csv(url_acad)
-
         df_b.columns = [c.strip().upper().replace("_", " ") for c in df_b.columns]
         df_a.columns = [c.strip().upper().replace("_", " ") for c in df_a.columns]
         
-        # Limpieza de Código (Entero limpio)
         def clean_code(val):
             try: return str(int(float(val))).strip()
             except: return str(val).strip()
@@ -76,23 +74,18 @@ def load_and_merge_data():
         else:
             df_final = df_b
 
-        # Regla de Negocio: Solo Iniciado y Cerrado
         df_final['ESTADO'] = df_final['ESTADO'].astype(str).str.capitalize().str.strip()
         df_final = df_final[df_final['ESTADO'].isin(['Iniciado', 'Cerrado'])]
 
-        # Conversión de Fechas para Ordenamiento
-        df_final['FECHA INICIO DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
-        df_final = df_final.sort_values(by='FECHA INICIO DT', ascending=True)
+        # Fechas y Ordenamiento
+        df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
+        df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
-        # Limpieza de textos
         for col in ['EMPRESA', 'FACILITADOR', 'ACCION FORMATIVA']:
-            if col in df_final.columns:
-                df_final[col] = df_final[col].astype(str).replace(['nan', 'None'], 'S/D').str.strip()
+            df_final[col] = df_final[col].astype(str).replace(['nan', 'None'], 'S/D').str.strip()
 
-        # Asegurar números
         cols_num = ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS', 'HORAS FALTAN']
         for col in cols_num:
-            if col not in df_final.columns: df_final[col] = 0
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0).astype(int)
 
         df_final['PARTICIPANTES'] = df_final['OPERARIOS'] + df_final['MANDOS MEDIOS'] + df_final['GERENTES']
@@ -109,18 +102,23 @@ df = load_and_merge_data()
 if not df.empty:
     st.sidebar.header("🛠️ Filtros")
     
-    # Cascada de filtros
+    # 1. Filtro Empresa
     f_empresa = st.sidebar.multiselect("Empresa", sorted(df['EMPRESA'].unique()))
-    df_temp = df[df['EMPRESA'].isin(f_empresa)] if f_empresa else df
+    df_f1 = df[df['EMPRESA'].isin(f_empresa)] if f_empresa else df
     
-    f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_temp['FACILITADOR'].unique()))
-    if f_facilitador: df_temp = df_temp[df_temp['FACILITADOR'].isin(f_facilitador)]
+    # 2. Filtro Facilitador (Depende de Empresa)
+    f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique()))
+    df_f2 = df_f1[df_f1['FACILITADOR'].isin(f_facilitador)] if f_facilitador else df_f1
     
-    f_curso = st.sidebar.multiselect("Acción Formativa", sorted(df_temp['ACCION FORMATIVA'].unique()))
-    f_estado = st.sidebar.multiselect("Estado", sorted(df_temp['ESTADO'].unique()), default=sorted(df_temp['ESTADO'].unique()))
-
-    df_f = df_temp[df_temp['ESTADO'].isin(f_estado)]
-    if f_curso: df_f = df_f[df_f['ACCION FORMATIVA'].isin(f_curso)]
+    # 3. Filtro Estado (Crucial para limpiar la lista de acciones formativas)
+    f_estado = st.sidebar.multiselect("Estado", sorted(df_f2['ESTADO'].unique()), default=sorted(df_f2['ESTADO'].unique()))
+    df_f3 = df_f2[df_f2['ESTADO'].isin(f_estado)]
+    
+    # 4. Filtro Acción Formativa (Ahora sí depende de Facilitador Y Estado)
+    f_curso = st.sidebar.multiselect("Acción Formativa", sorted(df_f3['ACCION FORMATIVA'].unique()))
+    
+    # DataFrame Final
+    df_f = df_f3[df_f3['ACCION FORMATIVA'].isin(f_curso)] if f_curso else df_f3
 
     t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Tabla de Datos", "📂 Repositorio"])
 
@@ -137,9 +135,8 @@ if not df.empty:
         st.subheader("1. Alcance Operativo por Empresa")
         df_g1 = df_f.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES', 'CANTIDAD ACCIONES']].sum().reset_index()
         fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS EJECUTADAS', 'PARTICIPANTES', 'CANTIDAD ACCIONES'], 
-                      barmode='group', text_auto=True, # text_auto=True elimina decimales innecesarios
+                      barmode='group', text_auto=True,
                       color_discrete_map={'HORAS EJECUTADAS': C_AZUL, 'PARTICIPANTES': C_AMARILLO, 'CANTIDAD ACCIONES': C_VERDE})
-        # Forzar el eje Y a ser entero (quitar el .0)
         fig1.update_yaxes(tickformat="d")
         st.plotly_chart(fig1, use_container_width=True)
 
@@ -159,34 +156,29 @@ if not df.empty:
             st.plotly_chart(fig3, use_container_width=True)
 
     with t2:
-        st.subheader("📋 Registro Maestro de Acciones Formativas")
+        st.subheader("📋 Registro Maestro")
         
-        # Botones de Descarga
         cd1, cd2, _ = st.columns([1, 1, 4])
         with cd1:
             csv = df_f.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", csv, "reporte_leonel.csv", "text/csv")
+            st.download_button("📥 Descargar CSV", csv, "reporte.csv", "text/csv")
         with cd2:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_f.drop(columns=['FECHA INICIO DT'], errors='ignore').to_excel(writer, index=False, sheet_name='Datos')
-            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte_leonel.xlsx")
+                df_f.drop(columns=['FECHA_DT']).to_excel(writer, index=False)
+            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
 
-        # Configuración de columnas para centralizar y mostrar métricas
+        # Columnas restauradas: Incluyendo Inicio y Término
         columnas_visibles = [
-            'FECHA INICIO', 'EMPRESA', 'ACCION FORMATIVA', 'CODIGO CURSO', 
-            'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 'HORAS FALTAN', 
-            'OPERARIOS', 'MANDOS MEDIOS', 'PARTICIPANTES'
+            'FECHA INICIO', 'FECHA TERMINO', 'EMPRESA', 'ACCION FORMATIVA', 
+            'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 
+            'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'PARTICIPANTES'
         ]
         
-        st.dataframe(
-            df_f[columnas_visibles], 
-            use_container_width=True, 
-            hide_index=True
-        )
+        st.dataframe(df_f[columnas_visibles], use_container_width=True, hide_index=True)
 
     with t3:
         if f_empresa and len(f_empresa) == 1:
             docs = list_files_in_folder(f_empresa[0])
-            for d in docs: st.link_button(f"📄 Abrir {d['name']}", d['webViewLink'])
-        else: st.info("Selecciona una empresa para ver documentos.")
+            for d in docs: st.link_button(f"📄 {d['name']}", d['webViewLink'])
+        else: st.info("Selecciona una empresa para ver sus archivos.")
