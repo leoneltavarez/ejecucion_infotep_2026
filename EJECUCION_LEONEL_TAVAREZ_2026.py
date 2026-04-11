@@ -40,18 +40,15 @@ def list_files_in_folder(empresa_name):
     try:
         service = get_drive_service()
         if not service: return []
-        # Búsqueda de la carpeta de la empresa
         query = f"name = '{empresa_name}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder'"
         results = service.files().list(q=query, fields="files(id, name)").execute()
         items = results.get('files', [])
         if not items: return []
         
         f_id = items[0]['id']
-        # Listar archivos dentro de esa carpeta
         res = service.files().list(q=f"'{f_id}' in parents and trashed = false", fields="files(name, webViewLink)").execute()
         return res.get('files', [])
-    except Exception as e:
-        return []
+    except: return []
 
 # --- MOTOR DE DATOS ---
 @st.cache_data(ttl=0)
@@ -81,7 +78,6 @@ def load_and_merge_data():
         df_final['ESTADO'] = df_final['ESTADO'].astype(str).str.capitalize().str.strip()
         df_final = df_final[df_final['ESTADO'].isin(['Iniciado', 'Cerrado'])]
 
-        # Ordenamiento Cronológico
         df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
@@ -105,19 +101,13 @@ df = load_and_merge_data()
 
 if not df.empty:
     st.sidebar.header("🛠️ Filtros")
-    
-    # Cascada de filtros refinada
     f_empresa = st.sidebar.multiselect("Empresa", sorted(df['EMPRESA'].unique()))
     df_f1 = df[df['EMPRESA'].isin(f_empresa)] if f_empresa else df
-    
     f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique()))
     df_f2 = df_f1[df_f1['FACILITADOR'].isin(f_facilitador)] if f_facilitador else df_f1
-    
     f_estado = st.sidebar.multiselect("Estado", sorted(df_f2['ESTADO'].unique()), default=sorted(df_f2['ESTADO'].unique()))
     df_f3 = df_f2[df_f2['ESTADO'].isin(f_estado)]
-    
     f_curso = st.sidebar.multiselect("Acción Formativa", sorted(df_f3['ACCION FORMATIVA'].unique()))
-    
     df_f = df_f3[df_f3['ACCION FORMATIVA'].isin(f_curso)] if f_curso else df_f3
 
     t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Tabla de Datos", "📂 Repositorio"])
@@ -129,7 +119,6 @@ if not df.empty:
         with c2: st.metric("Participantes", f"{df_f['PARTICIPANTES'].sum():,}")
         with c3: st.metric("Acciones Formativas", f"{len(df_f):,}")
         with c4: st.metric("Empresas Impactadas", f"{df_f['EMPRESA'].nunique()}")
-
         st.markdown("---")
         
         st.subheader("1. Alcance Operativo por Empresa")
@@ -157,23 +146,21 @@ if not df.empty:
 
     with t2:
         st.subheader("📋 Registro Maestro")
-        
         cd1, cd2, _ = st.columns([1, 1, 4])
         with cd1:
             csv = df_f.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", csv, "reporte_leonel.csv", "text/csv")
+            st.download_button("📥 Descargar CSV", csv, "reporte.csv", "text/csv")
         with cd2:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_f.drop(columns=['FECHA_DT']).to_excel(writer, index=False)
-            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte_leonel.xlsx")
+            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
 
         columnas_visibles = [
             'EMPRESA', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
             'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 
             'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'PARTICIPANTES'
         ]
-        
         st.dataframe(df_f[columnas_visibles], use_container_width=True, hide_index=True)
 
     with t3:
@@ -181,11 +168,16 @@ if not df.empty:
         if f_empresa and len(f_empresa) == 1:
             archivos = list_files_in_folder(f_empresa[0])
             if archivos:
-                st.write(f"Archivos encontrados para **{f_empresa[0]}**:")
+                st.write(f"Archivos para **{f_empresa[0]}**:")
+                st.markdown("---")
                 for a in archivos:
-                    # AQUÍ ESTÁ LA OPCIÓN DE ABRIR RESTAURADA
-                    st.link_button(f"📄 Abrir {a['name']}", a['webViewLink'])
+                    # USAMOS COLUMNAS PARA SEPARAR NOMBRE Y BOTÓN
+                    col_file, col_btn = st.columns([0.7, 0.3])
+                    with col_file:
+                        st.write(f"📄 {a['name']}")
+                    with col_btn:
+                        st.link_button("Abrir Archivo", a['webViewLink'], use_container_width=True)
             else:
-                st.warning(f"No se encontraron archivos en la carpeta de {f_empresa[0]}.")
+                st.warning("Carpeta vacía.")
         else:
-            st.info("ℹ️ Para ver y abrir documentos, selecciona **una sola empresa** en el filtro lateral.")
+            st.info("ℹ️ Selecciona **una sola empresa** para gestionar sus documentos.")
