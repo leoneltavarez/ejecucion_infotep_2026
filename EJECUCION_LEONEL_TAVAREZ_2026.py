@@ -6,7 +6,7 @@ from io import BytesIO
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- IDENTIDAD VISUAL ---
+# --- ESTÉTICA ---
 COLOR_AZUL = "#0056b3"
 COLOR_AMARILLO = "#ffcc00"
 COLOR_VERDE = "#28a745"
@@ -27,20 +27,16 @@ def get_drive_service():
         return build('drive', 'v3', credentials=creds)
     except: return None
 
-def get_folder_id(empresa_name):
-    service = get_drive_service()
-    if not service: return None
-    query = f"name = '{empresa_name}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    results = service.files().list(q=query, fields="files(id, name)", supportsAllDrives=True).execute()
-    items = results.get('files', [])
-    return items[0]['id'] if items else None
-
 def list_files_in_folder(empresa_name):
     try:
         service = get_drive_service()
-        f_id = get_folder_id(empresa_name)
-        if not f_id: return []
-        res = service.files().list(q=f"'{f_id}' in parents and trashed = false", fields="files(id, name, webViewLink)", supportsAllDrives=True).execute()
+        if not service: return []
+        query = f"name = '{empresa_name}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder'"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        items = results.get('files', [])
+        if not items: return []
+        f_id = items[0]['id']
+        res = service.files().list(q=f"'{f_id}' in parents and trashed = false", fields="files(id, name, webViewLink)").execute()
         return res.get('files', [])
     except: return []
 
@@ -48,43 +44,41 @@ def list_files_in_folder(empresa_name):
 @st.cache_data(ttl=0) 
 def load_integrated_data():
     url_base = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/gviz/tq?tqx=out:csv"
-    ID_ACADEMICO = "1DamhAcTIll23Op6JyQvJYvSjKeaCmx8f_FmkKDp1UXE"
-    url_acad = f"https://docs.google.com/spreadsheets/d/{ID_ACADEMICO}/gviz/tq?tqx=out:csv"
+    url_acad = "https://docs.google.com/spreadsheets/d/1DamhAcTIll23Op6JyQvJYvSjKeaCmx8f_FmkKDp1UXE/gviz/tq?tqx=out:csv"
     
     try:
-        # Cargar y normalizar Base Principal
         df_base = pd.read_csv(url_base)
-        df_base.columns = [c.strip().upper().replace("_", " ") for c in df_base.columns]
+        df_base.columns = [str(c).strip().upper() for c in df_base.columns]
         
-        # Cargar y normalizar Académico
         try:
             df_acad = pd.read_csv(url_acad)
-            df_acad.columns = [c.strip().upper().replace("_", " ") for c in df_acad.columns]
+            df_acad.columns = [str(c).strip().upper() for c in df_acad.columns]
             
-            if 'CODIGO CURSO' in df_acad.columns:
+            # Verificamos que existan las llaves de unión
+            if 'CODIGO CURSO' in df_acad.columns and 'FACILITADOR' in df_acad.columns:
                 df_acad_sub = df_acad[['CODIGO CURSO', 'FACILITADOR']].drop_duplicates(subset=['CODIGO CURSO'])
                 df_final = pd.merge(df_base, df_acad_sub, on='CODIGO CURSO', how='left')
             else:
                 df_final = df_base
+                if 'FACILITADOR' not in df_final.columns: df_final['FACILITADOR'] = "POR ASIGNAR"
         except:
             df_final = df_base
+            df_final['FACILITADOR'] = "ERROR CARGA ACADÉMICO"
 
-        # Limpieza de datos
+        # Limpieza de fechas y números
         if 'FECHA INICIO' in df_final.columns:
             df_final['FECHA INICIO'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
-            df_final = df_final.sort_values(by='FECHA INICIO', ascending=True)
 
-        cols_num = ['HORAS EJECUTADAS', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES']
-        for col in cols_num:
+        for col in ['HORAS EJECUTADAS', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES']:
             if col in df_final.columns:
                 df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0).astype(int)
         
         df_final['PARTICIPANTES'] = df_final['OPERARIOS'] + df_final['MANDOS MEDIOS'] + df_final['GERENTES']
-        df_final['FACILITADOR'] = df_final['FACILITADOR'].fillna("POR ASIGNAR")
+        df_final['FACILITADOR'] = df_final['FACILITADOR'].fillna("SIN ASIGNAR")
         
         return df_final
     except Exception as e:
-        st.error(f"Error técnico: {e}")
+        st.error(f"Error: {e}")
         return pd.DataFrame()
 
 # --- INTERFAZ ---
@@ -92,30 +86,27 @@ try:
     df_data = load_integrated_data()
     
     if not df_data.empty:
-        st.sidebar.title("🛠️ Filtros Maestros")
+        st.sidebar.title("🛠️ Filtros")
         f_empresa = st.sidebar.multiselect("Empresa", sorted(df_data["EMPRESA"].unique()))
         f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_data["FACILITADOR"].unique()))
-        f_accion = st.sidebar.multiselect("Acción Formativa", sorted(df_data["ACCION FORMATIVA"].unique()))
         f_estado = st.sidebar.multiselect("Estado", sorted(df_data["ESTADO"].unique()), default=df_data["ESTADO"].unique())
 
         df_f = df_data[df_data["ESTADO"].isin(f_estado)]
         if f_empresa: df_f = df_f[df_f["EMPRESA"].isin(f_empresa)]
         if f_facilitador: df_f = df_f[df_f["FACILITADOR"].isin(f_facilitador)]
-        if f_accion: df_f = df_f[df_f["ACCION FORMATIVA"].isin(f_accion)]
 
-        t_dash, t_tabla, t_drive = st.tabs(["📊 Dashboard", "📋 Registro Datos", "📂 Repositorio Drive"])
+        t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Datos", "📂 Repositorio Drive"])
 
-        with t_dash:
-            st.title("Control Integrado INFOTEP 2026")
+        with t1:
+            st.title("Control de Gestión INFOTEP 2026")
             
-            # Gráfico 1: Ejecución Operativa (Horas, Participantes y Cantidad de Cursos)
-            st.subheader("1. Alcance Operativo (Horas, Participantes y Acciones)")
+            # Gráfico 1: Horas, Participantes y Acciones (Contando cada fila como 1 curso)
+            st.subheader("1. Alcance: Horas, Participantes y Cursos")
             df_g1 = df_f.copy()
-            df_g1['ACCIONES FORMATIVAS'] = 1
-            df_g1 = df_g1.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES', 'ACCIONES FORMATIVAS']].sum().reset_index()
-            fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS EJECUTADAS', 'PARTICIPANTES', 'ACCIONES FORMATIVAS'], 
-                          barmode='group', text_auto='d',
-                          color_discrete_map={'HORAS EJECUTADAS': COLOR_AZUL, 'PARTICIPANTES': COLOR_AMARILLO, 'ACCIONES FORMATIVAS': COLOR_VERDE})
+            df_g1['ACCIONES'] = 1
+            df_g1 = df_g1.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES', 'ACCIONES']].sum().reset_index()
+            fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS EJECUTADAS', 'PARTICIPANTES', 'ACCIONES'], barmode='group', text_auto='d',
+                          color_discrete_map={'HORAS EJECUTADAS': COLOR_AZUL, 'PARTICIPANTES': COLOR_AMARILLO, 'ACCIONES': COLOR_VERDE})
             st.plotly_chart(fig1, use_container_width=True)
 
             col_a, col_b = st.columns(2)
@@ -125,23 +116,20 @@ try:
                 fig2 = px.bar(df_g2, x='EMPRESA', y=['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES'], barmode='stack', text_auto='d',
                               color_discrete_map={'OPERARIOS': COLOR_AZUL, 'MANDOS MEDIOS': COLOR_AMARILLO, 'GERENTES': COLOR_ROJO})
                 st.plotly_chart(fig2, use_container_width=True)
-            
             with col_b:
-                st.subheader("3. Productividad Facilitadores")
-                df_g3 = df_f.groupby('FACILITADOR').size().reset_index(name='TOTAL CURSOS')
-                fig3 = px.bar(df_g3, x='FACILITADOR', y='TOTAL CURSOS', text_auto=True, color_discrete_sequence=[COLOR_AZUL])
+                st.subheader("3. Cursos por Facilitador")
+                df_g3 = df_f.groupby('FACILITADOR').size().reset_index(name='TOTAL')
+                fig3 = px.bar(df_g3, x='FACILITADOR', y='TOTAL', text_auto=True, color_discrete_sequence=[COLOR_AZUL])
                 st.plotly_chart(fig3, use_container_width=True)
 
-        with t_tabla:
+        with t2:
             st.dataframe(df_f, use_container_width=True, hide_index=True)
 
-        with t_drive:
+        with t3:
             if f_empresa and len(f_empresa) == 1:
                 archivos = list_files_in_folder(f_empresa[0])
-                for a in archivos:
-                    st.link_button(f"📄 Abrir {a['name']}", a['webViewLink'])
-            else:
-                st.info("Selecciona una sola empresa para ver sus archivos.")
+                for a in archivos: st.link_button(f"📄 {a['name']}", a['webViewLink'])
+            else: st.info("Selecciona una empresa para ver sus archivos.")
 
 except Exception as e:
-    st.error(f"Error en la aplicación: {e}")
+    st.error(f"Error General: {e}")
