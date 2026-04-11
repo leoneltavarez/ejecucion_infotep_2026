@@ -50,7 +50,7 @@ def list_files_in_folder(empresa_name):
     except: return []
 
 # --- MOTOR DE DATOS ---
-@st.cache_data(ttl=0)
+@st.cache_data(ttl=3600) # Caché de 1 hora por defecto
 def load_and_merge_data():
     url_base = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/export?format=csv"
     url_acad = "https://docs.google.com/spreadsheets/d/1DamhAcTIll23Op6JyQvJYvSjKeaCmx8f_FmkKDp1UXE/export?format=csv"
@@ -61,22 +61,14 @@ def load_and_merge_data():
         df_b.columns = [c.strip().upper().replace("_", " ") for c in df_b.columns]
         df_a.columns = [c.strip().upper().replace("_", " ") for c in df_a.columns]
         
-        # Función de limpieza segura para evitar que el script se rompa
         def safe_clean(val):
-            if pd.isna(val) or str(val).strip().lower() in ['nan', 'none', '']:
-                return "S/D"
-            try:
-                # Intenta quitar el decimal si es un número
-                return str(int(float(val))).strip()
-            except:
-                return str(val).strip()
+            if pd.isna(val) or str(val).strip().lower() in ['nan', 'none', '']: return "S/D"
+            try: return str(int(float(val))).strip()
+            except: return str(val).strip()
 
-        # Aplicar limpieza a Código y RNC
         df_b['CODIGO CURSO'] = df_b['CODIGO CURSO'].apply(safe_clean)
         df_a['CODIGO CURSO'] = df_a['CODIGO CURSO'].apply(safe_clean)
-        
-        if 'RNC' in df_b.columns:
-            df_b['RNC'] = df_b['RNC'].apply(safe_clean)
+        if 'RNC' in df_b.columns: df_b['RNC'] = df_b['RNC'].apply(safe_clean)
         
         if 'FACILITADOR' in df_a.columns:
             df_a_sub = df_a[['CODIGO CURSO', 'FACILITADOR']].drop_duplicates(subset=['CODIGO CURSO'])
@@ -86,16 +78,9 @@ def load_and_merge_data():
 
         df_final['ESTADO'] = df_final['ESTADO'].astype(str).str.capitalize().str.strip()
         df_final = df_final[df_final['ESTADO'].isin(['Iniciado', 'Cerrado'])]
-
-        # Ordenamiento Cronológico
         df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
-        for col in ['EMPRESA', 'FACILITADOR', 'ACCION FORMATIVA']:
-            if col in df_final.columns:
-                df_final[col] = df_final[col].astype(str).replace(['nan', 'None'], 'S/D').str.strip()
-
-        # Asegurar que las columnas numéricas existan y sean enteras
         cols_num = ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS', 'HORAS FALTAN']
         for col in cols_num:
             if col not in df_final.columns: df_final[col] = 0
@@ -103,10 +88,9 @@ def load_and_merge_data():
 
         df_final['PARTICIPANTES'] = df_final['OPERARIOS'] + df_final['MANDOS MEDIOS'] + df_final['GERENTES']
         df_final['CANTIDAD ACCIONES'] = 1
-        
         return df_final
     except Exception as e:
-        st.error(f"Error en el procesamiento de datos: {e}")
+        st.error(f"Error: {e}")
         return pd.DataFrame()
 
 # --- INTERFAZ ---
@@ -114,6 +98,14 @@ df = load_and_merge_data()
 
 if not df.empty:
     st.sidebar.header("🛠️ Filtros")
+    
+    # BOTÓN DE SINCRONIZACIÓN (RESTAURADO)
+    if st.sidebar.button("🔄 Sincronizar con Google Sheets"):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.sidebar.markdown("---")
+    
     f_empresa = st.sidebar.multiselect("Empresa", sorted(df['EMPRESA'].unique()))
     df_f1 = df[df['EMPRESA'].isin(f_empresa)] if f_empresa else df
     f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique()))
@@ -162,12 +154,12 @@ if not df.empty:
         cd1, cd2, _ = st.columns([1, 1, 4])
         with cd1:
             csv = df_f.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", csv, "reporte_leonel.csv", "text/csv")
+            st.download_button("📥 Descargar CSV", csv, "reporte.csv", "text/csv")
         with cd2:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_f.drop(columns=['FECHA_DT']).to_excel(writer, index=False)
-            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte_leonel.xlsx")
+            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
 
         columnas_visibles = [
             'EMPRESA', 'RNC', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
@@ -185,11 +177,7 @@ if not df.empty:
                 st.markdown("---")
                 for a in archivos:
                     col_file, col_btn = st.columns([0.7, 0.3])
-                    with col_file:
-                        st.write(f"📄 {a['name']}")
-                    with col_btn:
-                        st.link_button("Abrir Archivo", a['webViewLink'], use_container_width=True)
-            else:
-                st.warning("Carpeta vacía o sin acceso.")
-        else:
-            st.info("ℹ️ Selecciona **una sola empresa** para gestionar sus documentos.")
+                    with col_file: st.write(f"📄 {a['name']}")
+                    with col_btn: st.link_button("Abrir Archivo", a['webViewLink'], use_container_width=True)
+            else: st.warning("Carpeta vacía o sin acceso.")
+        else: st.info("ℹ️ Selecciona **una sola empresa** para gestionar sus documentos.")
