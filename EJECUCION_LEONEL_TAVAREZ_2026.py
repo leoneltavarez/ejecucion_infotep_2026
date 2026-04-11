@@ -61,12 +61,17 @@ def load_and_merge_data():
         df_b.columns = [c.strip().upper().replace("_", " ") for c in df_b.columns]
         df_a.columns = [c.strip().upper().replace("_", " ") for c in df_a.columns]
         
-        def clean_code(val):
+        # Función de limpieza para RNC y Códigos
+        def clean_numeric_string(val):
             try: return str(int(float(val))).strip()
             except: return str(val).strip()
 
-        df_b['CODIGO CURSO'] = df_b['CODIGO CURSO'].apply(clean_code)
-        df_a['CODIGO CURSO'] = df_a['CODIGO CURSO'].apply(clean_code)
+        df_b['CODIGO CURSO'] = df_b['CODIGO CURSO'].apply(clean_numeric_string)
+        df_a['CODIGO CURSO'] = df_a['CODIGO CURSO'].apply(clean_numeric_string)
+        
+        # Limpieza del RNC si existe en la base
+        if 'RNC' in df_b.columns:
+            df_b['RNC'] = df_b['RNC'].apply(clean_numeric_string)
         
         if 'FACILITADOR' in df_a.columns:
             df_a_sub = df_a[['CODIGO CURSO', 'FACILITADOR']].drop_duplicates(subset=['CODIGO CURSO'])
@@ -80,7 +85,7 @@ def load_and_merge_data():
         df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
-        for col in ['EMPRESA', 'FACILITADOR', 'ACCION FORMATIVA', 'RNC']:
+        for col in ['EMPRESA', 'FACILITADOR', 'ACCION FORMATIVA']:
             if col in df_final.columns:
                 df_final[col] = df_final[col].astype(str).replace(['nan', 'None'], 'S/D').str.strip()
 
@@ -123,62 +128,4 @@ if not df.empty:
         st.markdown("---")
         
         st.subheader("1. Alcance Operativo por Empresa")
-        df_g1 = df_f.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES', 'CANTIDAD ACCIONES']].sum().reset_index()
-        fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS EJECUTADAS', 'PARTICIPANTES', 'CANTIDAD ACCIONES'], 
-                      barmode='group', text_auto=True,
-                      color_discrete_map={'HORAS EJECUTADAS': C_AZUL, 'PARTICIPANTES': C_AMARILLO, 'CANTIDAD ACCIONES': C_VERDE})
-        fig1.update_yaxes(tickformat="d")
-        st.plotly_chart(fig1, use_container_width=True)
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("2. Distribución de Niveles")
-            df_g2 = df_f.groupby('EMPRESA')[['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES']].sum().reset_index()
-            fig2 = px.bar(df_g2, x='EMPRESA', y=['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES'], barmode='stack', text_auto=True,
-                          color_discrete_map={'OPERARIOS': C_AZUL, 'MANDOS MEDIOS': C_AMARILLO, 'GERENTES': C_ROJO})
-            fig2.update_yaxes(tickformat="d")
-            st.plotly_chart(fig2, use_container_width=True)
-        with col_b:
-            st.subheader("3. Ejecución por Facilitador")
-            df_g3 = df_f.groupby(['FACILITADOR', 'EMPRESA']).size().reset_index(name='ACCIONES')
-            fig3 = px.bar(df_g3, x='FACILITADOR', y='ACCIONES', color='EMPRESA', text_auto=True)
-            fig3.update_yaxes(tickformat="d")
-            st.plotly_chart(fig3, use_container_width=True)
-
-    with t2:
-        st.subheader("📋 Registro Maestro")
-        cd1, cd2, _ = st.columns([1, 1, 4])
-        with cd1:
-            csv = df_f.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", csv, "reporte_leonel.csv", "text/csv")
-        with cd2:
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_f.drop(columns=['FECHA_DT']).to_excel(writer, index=False)
-            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte_leonel.xlsx")
-
-        # COLUMNAS ACTUALIZADAS: INCLUYE RNC Y GERENTES
-        columnas_visibles = [
-            'EMPRESA', 'RNC', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
-            'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 
-            'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
-        ]
-        st.dataframe(df_f[columnas_visibles], use_container_width=True, hide_index=True)
-
-    with t3:
-        st.subheader("📂 Documentos en Drive")
-        if f_empresa and len(f_empresa) == 1:
-            archivos = list_files_in_folder(f_empresa[0])
-            if archivos:
-                st.write(f"Archivos para **{f_empresa[0]}**:")
-                st.markdown("---")
-                for a in archivos:
-                    col_file, col_btn = st.columns([0.7, 0.3])
-                    with col_file:
-                        st.write(f"📄 {a['name']}")
-                    with col_btn:
-                        st.link_button("Abrir Archivo", a['webViewLink'], use_container_width=True)
-            else:
-                st.warning("Carpeta vacía o sin acceso.")
-        else:
-            st.info("ℹ️ Selecciona **una sola empresa** para gestionar sus documentos.")
+        df_g1 = df_f.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES', 'CANTIDAD ACCIONES']].sum().reset_index
