@@ -5,11 +5,11 @@ import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- ESTÉTICA ---
+# --- ESTÉTICA CORPORATIVA INFOTEP ---
 C_AZUL, C_AMARILLO, C_VERDE, C_ROJO = "#0056b3", "#ffcc00", "#28a745", "#dc3545"
 st.set_page_config(page_title="Dashboard Maestro - Leonel Tavarez", layout="wide")
 
-# --- CONFIGURACIÓN DRIVE ---
+# --- CONFIGURACIÓN DRIVE (Gestión de Archivos) ---
 PARENT_FOLDER_ID = "19d0FCdGHQp9wG0DNBLgH5kPtG5rAGJ9r"
 
 def get_drive_service():
@@ -34,7 +34,7 @@ def list_files_in_folder(empresa_name):
         return res.get('files', [])
     except: return []
 
-# --- CARGA E INTEGRACIÓN LIMPIA ---
+# --- MOTOR DE DATOS ---
 @st.cache_data(ttl=0)
 def load_and_merge_data():
     url_base = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/export?format=csv"
@@ -44,7 +44,7 @@ def load_and_merge_data():
         df_b = pd.read_csv(url_base)
         df_a = pd.read_csv(url_acad)
 
-        # Normalización de encabezados
+        # Estandarizar encabezados
         df_b.columns = [c.strip().upper().replace("_", " ") for c in df_b.columns]
         df_a.columns = [c.strip().upper().replace("_", " ") for c in df_a.columns]
         
@@ -52,19 +52,20 @@ def load_and_merge_data():
         df_b['CODIGO CURSO'] = df_b['CODIGO CURSO'].astype(str).str.strip()
         df_a['CODIGO CURSO'] = df_a['CODIGO CURSO'].astype(str).str.strip()
         
-        # Merge por Código de Curso
+        # Unión por Código de Curso (Infalible)
         if 'FACILITADOR' in df_a.columns:
             df_a_sub = df_a[['CODIGO CURSO', 'FACILITADOR']].drop_duplicates(subset=['CODIGO CURSO'])
             df_final = pd.merge(df_b, df_a_sub, on='CODIGO CURSO', how='left')
         else:
             df_final = df_b
 
-        # LIMPIEZA ANT-ERRORES (Para evitar el error de comparación float vs str)
-        for col in ['EMPRESA', 'FACILITADOR', 'ESTADO']:
+        # Limpieza de textos y eliminación de vacíos para los filtros
+        columnas_texto = ['EMPRESA', 'FACILITADOR', 'ESTADO', 'ACCION FORMATIVA']
+        for col in columnas_texto:
             if col in df_final.columns:
-                df_final[col] = df_final[col].fillna("SIN DATO").astype(str).str.strip()
+                df_final[col] = df_final[col].fillna("PENDIENTE").astype(str).str.strip()
 
-        # Asegurar números
+        # Asegurar valores numéricos para KPIs y Gráficos
         for col in ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS']:
             if col not in df_final.columns: df_final[col] = 0
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0).astype(int)
@@ -73,7 +74,7 @@ def load_and_merge_data():
         
         return df_final
     except Exception as e:
-        st.error(f"Error en procesamiento: {e}")
+        st.error(f"Error en carga: {e}")
         return pd.DataFrame()
 
 # --- INTERFAZ ---
@@ -81,27 +82,45 @@ try:
     df = load_and_merge_data()
     
     if not df.empty:
+        # SIDEBAR
         st.sidebar.header("🛠️ Filtros de Control")
         
-        # El truco para evitar el error: convertir a set para quitar duplicados y asegurar que todo es str antes de sorted()
         def safe_sorted(col_name):
-            values = df[col_name].unique()
-            return sorted([str(x) for x in values if pd.notna(x)])
+            values = [x for x in df[col_name].unique() if x != "PENDIENTE"]
+            return sorted([str(x) for x in values])
 
         f_empresa = st.sidebar.multiselect("Empresa", safe_sorted("EMPRESA"))
+        f_curso = st.sidebar.multiselect("Acción Formativa", safe_sorted("ACCION FORMATIVA"))
         f_facilitador = st.sidebar.multiselect("Facilitador", safe_sorted("FACILITADOR"))
         f_estado = st.sidebar.multiselect("Estado", safe_sorted("ESTADO"), default=df["ESTADO"].unique().tolist())
 
+        # Aplicar filtros
         df_f = df[df["ESTADO"].isin(f_estado)]
         if f_empresa: df_f = df_f[df_f["EMPRESA"].isin(f_empresa)]
+        if f_curso: df_f = df_f[df_f["ACCION FORMATIVA"].isin(f_curso)]
         if f_facilitador: df_f = df_f[df_f["FACILITADOR"].isin(f_facilitador)]
 
-        t1, t2, t3 = st.tabs(["📊 Dashboard", "📋 Registro", "📂 Drive"])
+        # TABS
+        t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Tabla de Datos", "📂 Repositorio Drive"])
 
         with t1:
-            st.title("Gestión de Capacitación 2026")
+            st.title("Control de Gestión Leonel Tavarez 2026")
             
-            # Gráfico 1: Alcance
+            # --- KPIs (Cuadros de Información) ---
+            k1, k2, k3, k4 = st.columns(4)
+            with k1:
+                st.metric("Total Horas", f"{df_f['HORAS EJECUTADAS'].sum():,}")
+            with k2:
+                st.metric("Participantes", f"{df_f['PARTICIPANTES'].sum():,}")
+            with k3:
+                st.metric("Acciones Formativas", f"{len(df_f):,}")
+            with k4:
+                st.metric("Empresas", f"{df_f['EMPRESA'].nunique()}")
+
+            st.markdown("---")
+
+            # Gráfico 1: Ejecución
+            st.subheader("1. Alcance Operativo por Empresa")
             df_g1 = df_f.copy()
             df_g1['CURSOS'] = 1
             df_g1 = df_g1.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES', 'CURSOS']].sum().reset_index()
@@ -111,25 +130,28 @@ try:
 
             col_a, col_b = st.columns(2)
             with col_a:
-                st.subheader("Distribución Jerárquica")
+                st.subheader("2. Distribución de Niveles")
                 df_g2 = df_f.groupby('EMPRESA')[['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES']].sum().reset_index()
                 fig2 = px.bar(df_g2, x='EMPRESA', y=['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES'], barmode='stack', text_auto='d',
                               color_discrete_map={'OPERARIOS': C_AZUL, 'MANDOS MEDIOS': C_AMARILLO, 'GERENTES': C_ROJO})
                 st.plotly_chart(fig2, use_container_width=True)
             with col_b:
-                st.subheader("Participación Facilitador")
+                st.subheader("3. Productividad por Facilitador")
                 df_g3 = df_f.groupby('FACILITADOR').size().reset_index(name='TOTAL')
                 fig3 = px.bar(df_g3, x='FACILITADOR', y='TOTAL', text_auto=True, color_discrete_sequence=[C_AZUL])
                 st.plotly_chart(fig3, use_container_width=True)
 
         with t2:
+            st.subheader("Detalle General de Acciones")
             st.dataframe(df_f, use_container_width=True, hide_index=True)
 
         with t3:
             if f_empresa and len(f_empresa) == 1:
                 archivos = list_files_in_folder(f_empresa[0])
-                for a in archivos: st.link_button(f"📄 {a['name']}", a['webViewLink'])
-            else: st.info("Selecciona una empresa para ver sus archivos.")
+                if archivos:
+                    for a in archivos: st.link_button(f"📄 Abrir {a['name']}", a['webViewLink'])
+                else: st.warning("Carpeta sin archivos.")
+            else: st.info("Selecciona una empresa para ver sus documentos.")
 
 except Exception as e:
-    st.error(f"Error de visualización: {e}")
+    st.error(f"Error General: {e}")
