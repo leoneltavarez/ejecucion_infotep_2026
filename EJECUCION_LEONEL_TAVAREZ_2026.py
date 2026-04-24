@@ -1,4 +1,4 @@
-import st as st
+import streamlit as st
 import pandas as pd
 import plotly.express as px
 import json
@@ -106,7 +106,7 @@ if not df.empty:
 
     st.sidebar.markdown("---")
     
-    # --- SEGMENTADOR DE TIEMPO CON LÓGICA EXCLUYENTE ---
+    # --- SEGMENTADOR DE TIEMPO (LÓGICA EXCLUYENTE SOLICITADA) ---
     st.sidebar.subheader("📅 Periodo de Capacitación")
     min_date = df['FECHA_DT'].min().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 1, 1).date()
     max_date = df['FECHA_DT'].max().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 12, 31).date()
@@ -114,7 +114,7 @@ if not df.empty:
     rango_fecha = st.sidebar.date_input("Selecciona Rango", [min_date, max_date])
     
     if isinstance(rango_fecha, list) and len(rango_fecha) == 2:
-        # Lógica de filtrado estricta: mayor o igual al inicio Y menor estricto al final
+        # Filtro estricto: incluye desde el inicio pero EXCLUYE el día final seleccionado
         df_f0 = df[(df['FECHA_DT'].dt.date >= rango_fecha[0]) & (df['FECHA_DT'].dt.date < rango_fecha[1])]
     else:
         df_f0 = df
@@ -171,7 +171,7 @@ if not df.empty:
             'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
         ]
         
-        # CÁLCULO DE TOTALES DINÁMICOS
+        # --- CÁLCULO DE LA FILA DE TOTALES ---
         totales = {
             'EMPRESA': 'TOTAL GENERAL FILTRADO',
             'ACCION FORMATIVA': f'{len(df_f)} Acciones Formativas',
@@ -192,9 +192,9 @@ if not df.empty:
         with cd2:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_con_total.to_excel(writer, index=False, sheet_name='Data')
+                df_con_total.to_excel(writer, index=False, sheet_name='Reporte')
                 workbook = writer.book
-                worksheet = writer.sheets['Data']
+                worksheet = writer.sheets['Reporte']
                 bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
                 worksheet.set_row(len(df_con_total), None, bold_fmt)
             st.download_button("📥 Descargar Excel con Totales", output.getvalue(), "reporte_totales.xlsx")
