@@ -79,9 +79,9 @@ def load_and_merge_data():
         df_final['ESTADO'] = df_final['ESTADO'].astype(str).str.capitalize().str.strip()
         df_final = df_final[df_final['ESTADO'].isin(['Iniciado', 'Cerrado'])]
         
-        # LIMPIEZA DE FECHAS CLAVE
-        df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=False, errors='coerce').dt.date
-        df_final = df_final.dropna(subset=['FECHA_DT']) # Eliminamos lo que no tenga fecha válida
+        # CONVERSIÓN CRÍTICA: Aseguramos que la columna sea tipo 'date' puro para comparar
+        df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], errors='coerce').dt.date
+        df_final = df_final.dropna(subset=['FECHA_DT']) 
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
         cols_num = ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS', 'HORAS FALTAN']
@@ -92,7 +92,7 @@ def load_and_merge_data():
         df_final['PARTICIPANTES'] = df_final['OPERARIOS'] + df_final['MANDOS MEDIOS'] + df_final['GERENTES']
         return df_final
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error en datos: {e}")
         return pd.DataFrame()
 
 # --- INTERFAZ ---
@@ -101,113 +101,92 @@ df = load_and_merge_data()
 if not df.empty:
     st.sidebar.header("🛠️ Filtros")
     
-    if st.sidebar.button("🔄 Sincronizar con Google Sheets"):
+    if st.sidebar.button("🔄 Sincronizar Datos"):
         st.cache_data.clear()
         st.rerun()
 
     st.sidebar.markdown("---")
     
-    # --- SEGMENTADOR DE TIEMPO ---
+    # --- SEGMENTADOR DE TIEMPO (Español y Lógica Excluyente) ---
     st.sidebar.subheader("📅 Periodo de Capacitación")
-    min_date = df['FECHA_DT'].min()
-    max_date = df['FECHA_DT'].max()
+    min_d, max_d = df['FECHA_DT'].min(), df['FECHA_DT'].max()
     
     rango_fecha = st.sidebar.date_input(
-        "Selecciona Rango (Día/Mes/Año)", 
-        [min_date, max_date],
+        "Rango de Fechas (Día/Mes/Año)", 
+        [min_d, max_d],
         format="DD/MM/YYYY"
     )
     
-    # Lógica de filtrado CORE
+    # FILTRADO DE FECHA (El corazón del problema)
     if isinstance(rango_fecha, list) and len(rango_fecha) == 2:
-        # APLICAMOS EL FILTRO ESTRICTO: Mayor o igual al inicio y MENOR al final
-        # Si seleccionas el 10/04, el sistema solo acepta fechas hasta el 09/04
-        df_f0 = df[(df['FECHA_DT'] >= rango_fecha[0]) & (df['FECHA_DT'] < rango_fecha[1])].copy()
+        # Solo lo que sea >= inicio y < final (excluye el mismo día final por tu instrucción)
+        df_f = df[(df['FECHA_DT'] >= rango_fecha[0]) & (df['FECHA_DT'] < rango_fecha[1])].copy()
     else:
-        df_f0 = df.copy()
+        df_f = df.copy()
 
-    # Filtros secundarios sobre los datos ya filtrados por fecha
-    f_empresa = st.sidebar.multiselect("Empresa", sorted(df_f0['EMPRESA'].unique()))
-    df_f1 = df_f0[df_f0['EMPRESA'].isin(f_empresa)] if f_empresa else df_f0
+    # FILTROS DINÁMICOS (Se actualizan según la fecha arriba)
+    f_empresa = st.sidebar.multiselect("Empresa", sorted(df_f['EMPRESA'].unique()))
+    if f_empresa: df_f = df_f[df_f['EMPRESA'].isin(f_empresa)]
     
-    f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique().astype(str)))
-    df_f2 = df_f1[df_f1['FACILITADOR'].isin(f_facilitador)] if f_facilitador else df_f1
+    f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f['FACILITADOR'].unique().astype(str)))
+    if f_facilitador: df_f = df_f[df_f['FACILITADOR'].isin(f_facilitador)]
     
-    f_estado = st.sidebar.multiselect("Estado", sorted(df_f2['ESTADO'].unique()), default=sorted(df_f2['ESTADO'].unique()))
-    df_f3 = df_f2[df_f2['ESTADO'].isin(f_estado)]
-    
-    f_curso = st.sidebar.multiselect("Acción Formativa", sorted(df_f3['ACCION FORMATIVA'].unique()))
-    df_f = df_f3[df_f3['ACCION FORMATIVA'].isin(f_curso)] if f_curso else df_f3
+    f_estado = st.sidebar.multiselect("Estado", sorted(df_f['ESTADO'].unique()), default=sorted(df_f['ESTADO'].unique()))
+    if f_estado: df_f = df_f[df_f['ESTADO'].isin(f_estado)]
 
     t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Tabla de Datos", "📂 Repositorio"])
 
     with t1:
         st.title("Control Operativo Leonel Tavarez 2026")
         c1, c2, c3, c4 = st.columns(4)
+        # Aquí el Dashboard ya usa df_f totalmente filtrado
         with c1: st.metric("Total Horas", f"{df_f['HORAS EJECUTADAS'].sum():,}")
         with c2: st.metric("Participantes", f"{df_f['PARTICIPANTES'].sum():,}")
         with c3: st.metric("Acciones Formativas", f"{len(df_f):,}")
         with c4: st.metric("Empresas Impactadas", f"{df_f['EMPRESA'].nunique()}")
         st.markdown("---")
         
-        st.subheader("1. Alcance Operativo por Empresa")
-        df_g1 = df_f.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES']].sum().reset_index()
-        df_g1['ACCIONES'] = df_f.groupby('EMPRESA').size().values
-        fig1 = px.bar(df_g1, x='EMPRESA', y=['HORAS EJECUTADAS', 'PARTICIPANTES', 'ACCIONES'], 
-                      barmode='group', text_auto=True,
-                      color_discrete_map={'HORAS EJECUTADAS': C_AZUL, 'PARTICIPANTES': C_AMARILLO, 'ACCIONES': C_VERDE})
-        st.plotly_chart(fig1, use_container_width=True)
+        st.subheader("Alcance por Empresa")
+        if not df_f.empty:
+            df_g = df_f.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES']].sum().reset_index()
+            fig = px.bar(df_g, x='EMPRESA', y=['HORAS EJECUTADAS', 'PARTICIPANTES'], barmode='group', text_auto=True,
+                         color_discrete_map={'HORAS EJECUTADAS': C_AZUL, 'PARTICIPANTES': C_AMARILLO})
+            st.plotly_chart(fig, use_container_width=True)
 
     with t2:
         st.subheader("📋 Registro Maestro")
+        columnas = ['EMPRESA', 'RNC', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 'PARTICIPANTES']
         
-        columnas_visibles = [
-            'EMPRESA', 'RNC', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
-            'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 
-            'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
-        ]
-        
-        # FILA DE TOTALES DINÁMICOS
+        # FILA DE TOTALES DINÁMICA
         totales = {
             'EMPRESA': 'TOTAL GENERAL FILTRADO',
             'ACCION FORMATIVA': f'{len(df_f)} Acciones Formativas',
             'HORAS EJECUTADAS': df_f['HORAS EJECUTADAS'].sum(),
-            'HORAS FALTAN': df_f['HORAS FALTAN'].sum(),
-            'OPERARIOS': df_f['OPERARIOS'].sum(),
-            'MANDOS MEDIOS': df_f['MANDOS MEDIOS'].sum(),
-            'GERENTES': df_f['GERENTES'].sum(),
             'PARTICIPANTES': df_f['PARTICIPANTES'].sum()
         }
         
-        df_con_total = pd.concat([df_f[columnas_visibles], pd.DataFrame([totales])], ignore_index=True).fillna('')
+        df_final_tabla = pd.concat([df_f[columnas], pd.DataFrame([totales])], ignore_index=True).fillna('')
 
-        # Botones de descarga
+        # Descargas
         cd1, cd2, _ = st.columns([1.2, 1.2, 3.6])
         with cd1:
-            csv = df_con_total.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", csv, "reporte_leontavarez.csv", "text/csv")
+            st.download_button("📥 Descargar CSV", df_final_tabla.to_csv(index=False).encode('utf-8'), "reporte.csv", "text/csv")
         with cd2:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_con_total.to_excel(writer, index=False, sheet_name='Data')
-                workbook = writer.book
-                worksheet = writer.sheets['Data']
-                bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
-                worksheet.set_row(len(df_con_total), None, bold_fmt)
-            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte_leontavarez.xlsx")
+                df_final_tabla.to_excel(writer, index=False, sheet_name='Data')
+            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
 
-        st.dataframe(df_con_total, use_container_width=True, hide_index=True)
+        st.dataframe(df_final_tabla, use_container_width=True, hide_index=True)
 
     with t3:
         st.subheader("📂 Repositorio")
         if f_empresa and len(f_empresa) == 1:
             archivos = list_files_in_folder(f_empresa[0])
             if archivos:
-                st.write(f"Archivos para **{f_empresa[0]}**:")
-                st.markdown("---")
                 for a in archivos:
                     col_file, col_btn = st.columns([0.7, 0.3])
                     with col_file: st.write(f"📄 {a['name']}")
-                    with col_btn: st.link_button("Abrir Archivo", a['webViewLink'], use_container_width=True)
-            else: st.warning("Carpeta vacía.")
-        else: st.info("ℹ️ Selecciona **una empresa** para ver sus archivos.")
+                    with col_btn: st.link_button("Abrir", a['webViewLink'])
+            else: st.warning("No hay archivos.")
+        else: st.info("Selecciona una sola empresa para ver documentos.")
