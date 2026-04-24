@@ -210,6 +210,11 @@ if not df_raw.empty:
             'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 'PARTICIPANTES'
         ]
 
+        # ── Ordenar por fecha de inicio ascendente ──
+        df_f = df_f.sort_values(
+            'FECHA_COMPARABLE', ascending=True
+        ).reset_index(drop=True)
+
         # ── Pre-cálculo de totales (reutilizados en descarga y en la vista) ──
         total_acciones      = len(df_f)
         total_horas         = df_f['HORAS EJECUTADAS'].sum()
@@ -300,8 +305,9 @@ if not df_raw.empty:
 
             st.download_button("📥 Excel", output.getvalue(), "reporte.xlsx")
 
-        # ── Tabla de datos filtrada (sin fila de totales incrustada en el df) ──
-        st.dataframe(df_f[columnas], use_container_width=True, hide_index=True)
+        # ── Tabla de datos filtrada y ordenada por fecha ascendente ──
+        df_tabla = df_f[columnas].sort_values('FECHA INICIO', key=lambda col: pd.to_datetime(col, dayfirst=False, errors='coerce'))
+        st.dataframe(df_tabla, use_container_width=True, hide_index=True)
 
         # ── FILA DE TOTALES DINÁMICA (debajo de la tabla, estilo tabla dinámica) ──
         st.markdown(f"""
