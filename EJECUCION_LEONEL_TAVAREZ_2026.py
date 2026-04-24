@@ -1,4 +1,4 @@
-import streamlit as st
+import st as st
 import pandas as pd
 import plotly.express as px
 import json
@@ -106,20 +106,19 @@ if not df.empty:
 
     st.sidebar.markdown("---")
     
-    # --- 1. SEGMENTADOR DE TIEMPO ---
+    # --- SEGMENTADOR DE TIEMPO CON LÓGICA EXCLUYENTE ---
     st.sidebar.subheader("📅 Periodo de Capacitación")
     min_date = df['FECHA_DT'].min().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 1, 1).date()
     max_date = df['FECHA_DT'].max().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 12, 31).date()
     
     rango_fecha = st.sidebar.date_input("Selecciona Rango", [min_date, max_date])
     
-    # Lógica de filtrado por tiempo
     if isinstance(rango_fecha, list) and len(rango_fecha) == 2:
-        df_f0 = df[(df['FECHA_DT'].dt.date >= rango_fecha[0]) & (df['FECHA_DT'].dt.date <= rango_fecha[1])]
+        # Lógica de filtrado estricta: mayor o igual al inicio Y menor estricto al final
+        df_f0 = df[(df['FECHA_DT'].dt.date >= rango_fecha[0]) & (df['FECHA_DT'].dt.date < rango_fecha[1])]
     else:
         df_f0 = df
 
-    # Resto de filtros sobre el corte de tiempo
     f_empresa = st.sidebar.multiselect("Empresa", sorted(df_f0['EMPRESA'].unique()))
     df_f1 = df_f0[df_f0['EMPRESA'].isin(f_empresa)] if f_empresa else df_f0
     f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique()))
@@ -172,10 +171,10 @@ if not df.empty:
             'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
         ]
         
-        # --- 2. CÁLCULO DE LA FILA DE TOTALES (INCLUYE ACCIONES FORMATIVAS) ---
+        # CÁLCULO DE TOTALES DINÁMICOS
         totales = {
             'EMPRESA': 'TOTAL GENERAL FILTRADO',
-            'ACCION FORMATIVA': f'{len(df_f)} Acciones Formativas', # Conteo solicitado
+            'ACCION FORMATIVA': f'{len(df_f)} Acciones Formativas',
             'HORAS EJECUTADAS': df_f['HORAS EJECUTADAS'].sum(),
             'HORAS FALTAN': df_f['HORAS FALTAN'].sum(),
             'OPERARIOS': df_f['OPERARIOS'].sum(),
@@ -184,10 +183,8 @@ if not df.empty:
             'PARTICIPANTES': df_f['PARTICIPANTES'].sum()
         }
         
-        # Concatenar la fila de total al final
         df_con_total = pd.concat([df_f[columnas_visibles], pd.DataFrame([totales])], ignore_index=True).fillna('')
 
-        # Botones de Descarga
         cd1, cd2, _ = st.columns([1.2, 1.2, 3.6])
         with cd1:
             csv = df_con_total.to_csv(index=False).encode('utf-8')
@@ -202,7 +199,6 @@ if not df.empty:
                 worksheet.set_row(len(df_con_total), None, bold_fmt)
             st.download_button("📥 Descargar Excel con Totales", output.getvalue(), "reporte_totales.xlsx")
 
-        # Mostrar tabla
         st.dataframe(df_con_total, use_container_width=True, hide_index=True)
 
     with t3:
