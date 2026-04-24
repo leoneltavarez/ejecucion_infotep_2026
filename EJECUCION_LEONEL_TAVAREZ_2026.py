@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import json
-from datetime import datetime
+from datetime import datetime, date
 from io import BytesIO
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -79,7 +79,9 @@ def load_and_merge_data():
 
         df_final['ESTADO'] = df_final['ESTADO'].astype(str).str.capitalize().str.strip()
         df_final = df_final[df_final['ESTADO'].isin(['Iniciado', 'Cerrado'])]
-        df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce')
+        
+        # Conversión robusta de fechas
+        df_final['FECHA_DT'] = pd.to_datetime(df_final['FECHA INICIO'], dayfirst=True, errors='coerce').dt.date
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True)
 
         cols_num = ['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'HORAS EJECUTADAS', 'HORAS FALTAN']
@@ -91,7 +93,7 @@ def load_and_merge_data():
         df_final['CANTIDAD ACCIONES'] = 1
         return df_final
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error cargando datos: {e}")
         return pd.DataFrame()
 
 # --- INTERFAZ ---
@@ -106,26 +108,36 @@ if not df.empty:
 
     st.sidebar.markdown("---")
     
-    # --- SEGMENTADOR DE TIEMPO (LÓGICA EXCLUYENTE SOLICITADA) ---
+    # --- SEGMENTADOR DE TIEMPO (FORMATO ESPAÑOL Y LÓGICA EXCLUYENTE) ---
     st.sidebar.subheader("📅 Periodo de Capacitación")
-    min_date = df['FECHA_DT'].min().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 1, 1).date()
-    max_date = df['FECHA_DT'].max().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 12, 31).date()
+    min_date_val = df['FECHA_DT'].min() if not df['FECHA_DT'].isnull().all() else date(2026, 1, 1)
+    max_date_val = df['FECHA_DT'].max() if not df['FECHA_DT'].isnull().all() else date(2026, 12, 31)
     
-    rango_fecha = st.sidebar.date_input("Selecciona Rango", [min_date, max_date])
+    # Input con formato DD/MM/YYYY
+    rango_fecha = st.sidebar.date_input(
+        "Selecciona Rango (Día/Mes/Año)", 
+        [min_date_val, max_date_val],
+        format="DD/MM/YYYY"
+    )
     
+    # Aplicación del filtro de tiempo estricto
     if isinstance(rango_fecha, list) and len(rango_fecha) == 2:
-        # Filtro estricto: incluye desde el inicio pero EXCLUYE el día final seleccionado
-        df_f0 = df[(df['FECHA_DT'].dt.date >= rango_fecha[0]) & (df['FECHA_DT'].dt.date < rango_fecha[1])]
+        # Filtro: Fecha >= Inicio Y Fecha < Final (Excluye el mismo día final)
+        df_f0 = df[(df['FECHA_DT'] >= rango_fecha[0]) & (df['FECHA_DT'] < rango_fecha[1])]
     else:
         df_f0 = df
 
-    f_empresa = st.sidebar.multiselect("Empresa", sorted(df_f0['EMPRESA'].unique()))
+    # Filtros secundarios
+    f_empresa = st.sidebar.multiselect("Empresa", sorted(df_f0['EMPRESA'].unique().tolist()))
     df_f1 = df_f0[df_f0['EMPRESA'].isin(f_empresa)] if f_empresa else df_f0
-    f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique()))
+    
+    f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique().astype(str).tolist()))
     df_f2 = df_f1[df_f1['FACILITADOR'].isin(f_facilitador)] if f_facilitador else df_f1
-    f_estado = st.sidebar.multiselect("Estado", sorted(df_f2['ESTADO'].unique()), default=sorted(df_f2['ESTADO'].unique()))
+    
+    f_estado = st.sidebar.multiselect("Estado", sorted(df_f2['ESTADO'].unique().tolist()), default=sorted(df_f2['ESTADO'].unique().tolist()))
     df_f3 = df_f2[df_f2['ESTADO'].isin(f_estado)]
-    f_curso = st.sidebar.multiselect("Acción Formativa", sorted(df_f3['ACCION FORMATIVA'].unique()))
+    
+    f_curso = st.sidebar.multiselect("Acción Formativa", sorted(df_f3['ACCION FORMATIVA'].unique().tolist()))
     df_f = df_f3[df_f3['ACCION FORMATIVA'].isin(f_curso)] if f_curso else df_f3
 
     t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Tabla de Datos", "📂 Repositorio"])
@@ -171,7 +183,7 @@ if not df.empty:
             'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
         ]
         
-        # --- CÁLCULO DE LA FILA DE TOTALES ---
+        # --- CÁLCULO DE TOTALES ---
         totales = {
             'EMPRESA': 'TOTAL GENERAL FILTRADO',
             'ACCION FORMATIVA': f'{len(df_f)} Acciones Formativas',
@@ -185,10 +197,11 @@ if not df.empty:
         
         df_con_total = pd.concat([df_f[columnas_visibles], pd.DataFrame([totales])], ignore_index=True).fillna('')
 
+        # Botones de descarga
         cd1, cd2, _ = st.columns([1.2, 1.2, 3.6])
         with cd1:
             csv = df_con_total.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV con Totales", csv, "reporte_totales.csv", "text/csv")
+            st.download_button("📥 Descargar CSV", csv, "reporte_totales.csv", "text/csv")
         with cd2:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -197,7 +210,7 @@ if not df.empty:
                 worksheet = writer.sheets['Reporte']
                 bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
                 worksheet.set_row(len(df_con_total), None, bold_fmt)
-            st.download_button("📥 Descargar Excel con Totales", output.getvalue(), "reporte_totales.xlsx")
+            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte_totales.xlsx")
 
         st.dataframe(df_con_total, use_container_width=True, hide_index=True)
 
