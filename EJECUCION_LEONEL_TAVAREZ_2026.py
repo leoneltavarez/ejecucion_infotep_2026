@@ -2,11 +2,12 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import json
+from datetime import datetime
 from io import BytesIO
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- CONFIGURACIÓN Y ESTÉTICA ---
+# --- CONFIGURACIÓN Y ESTÉTICA (COLORES INFOTEP) ---
 C_AZUL, C_AMARILLO, C_VERDE, C_ROJO = "#0056b3", "#ffcc00", "#28a745", "#dc3545"
 st.set_page_config(page_title="Gestión Leonel Tavarez 2026", layout="wide")
 
@@ -50,7 +51,7 @@ def list_files_in_folder(empresa_name):
     except: return []
 
 # --- MOTOR DE DATOS ---
-@st.cache_data(ttl=3600) # Caché de 1 hora por defecto
+@st.cache_data(ttl=3600)
 def load_and_merge_data():
     url_base = "https://docs.google.com/spreadsheets/d/1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU/export?format=csv"
     url_acad = "https://docs.google.com/spreadsheets/d/1DamhAcTIll23Op6JyQvJYvSjKeaCmx8f_FmkKDp1UXE/export?format=csv"
@@ -99,15 +100,28 @@ df = load_and_merge_data()
 if not df.empty:
     st.sidebar.header("🛠️ Filtros")
     
-    # BOTÓN DE SINCRONIZACIÓN (RESTAURADO)
     if st.sidebar.button("🔄 Sincronizar con Google Sheets"):
         st.cache_data.clear()
         st.rerun()
 
     st.sidebar.markdown("---")
     
-    f_empresa = st.sidebar.multiselect("Empresa", sorted(df['EMPRESA'].unique()))
-    df_f1 = df[df['EMPRESA'].isin(f_empresa)] if f_empresa else df
+    # --- 1. SEGMENTADOR DE TIEMPO ---
+    st.sidebar.subheader("📅 Periodo de Capacitación")
+    min_date = df['FECHA_DT'].min().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 1, 1).date()
+    max_date = df['FECHA_DT'].max().date() if not df['FECHA_DT'].isnull().all() else datetime(2026, 12, 31).date()
+    
+    rango_fecha = st.sidebar.date_input("Selecciona Rango", [min_date, max_date])
+    
+    # Lógica de filtrado por tiempo
+    if isinstance(rango_fecha, list) and len(rango_fecha) == 2:
+        df_f0 = df[(df['FECHA_DT'].dt.date >= rango_fecha[0]) & (df['FECHA_DT'].dt.date <= rango_fecha[1])]
+    else:
+        df_f0 = df
+
+    # Resto de filtros sobre el corte de tiempo
+    f_empresa = st.sidebar.multiselect("Empresa", sorted(df_f0['EMPRESA'].unique()))
+    df_f1 = df_f0[df_f0['EMPRESA'].isin(f_empresa)] if f_empresa else df_f0
     f_facilitador = st.sidebar.multiselect("Facilitador", sorted(df_f1['FACILITADOR'].unique()))
     df_f2 = df_f1[df_f1['FACILITADOR'].isin(f_facilitador)] if f_facilitador else df_f1
     f_estado = st.sidebar.multiselect("Estado", sorted(df_f2['ESTADO'].unique()), default=sorted(df_f2['ESTADO'].unique()))
@@ -151,25 +165,48 @@ if not df.empty:
 
     with t2:
         st.subheader("📋 Registro Maestro")
-        cd1, cd2, _ = st.columns([1, 1, 4])
-        with cd1:
-            csv = df_f.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", csv, "reporte.csv", "text/csv")
-        with cd2:
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_f.drop(columns=['FECHA_DT']).to_excel(writer, index=False)
-            st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
-
+        
         columnas_visibles = [
             'EMPRESA', 'RNC', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
             'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 
             'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
         ]
-        st.dataframe(df_f[columnas_visibles], use_container_width=True, hide_index=True)
+        
+        # --- 2. CÁLCULO DE LA FILA DE TOTALES (INCLUYE ACCIONES FORMATIVAS) ---
+        totales = {
+            'EMPRESA': 'TOTAL GENERAL FILTRADO',
+            'ACCION FORMATIVA': f'{len(df_f)} Acciones Formativas', # Conteo solicitado
+            'HORAS EJECUTADAS': df_f['HORAS EJECUTADAS'].sum(),
+            'HORAS FALTAN': df_f['HORAS FALTAN'].sum(),
+            'OPERARIOS': df_f['OPERARIOS'].sum(),
+            'MANDOS MEDIOS': df_f['MANDOS MEDIOS'].sum(),
+            'GERENTES': df_f['GERENTES'].sum(),
+            'PARTICIPANTES': df_f['PARTICIPANTES'].sum()
+        }
+        
+        # Concatenar la fila de total al final
+        df_con_total = pd.concat([df_f[columnas_visibles], pd.DataFrame([totales])], ignore_index=True).fillna('')
+
+        # Botones de Descarga
+        cd1, cd2, _ = st.columns([1.2, 1.2, 3.6])
+        with cd1:
+            csv = df_con_total.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Descargar CSV con Totales", csv, "reporte_totales.csv", "text/csv")
+        with cd2:
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_con_total.to_excel(writer, index=False, sheet_name='Data')
+                workbook = writer.book
+                worksheet = writer.sheets['Data']
+                bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
+                worksheet.set_row(len(df_con_total), None, bold_fmt)
+            st.download_button("📥 Descargar Excel con Totales", output.getvalue(), "reporte_totales.xlsx")
+
+        # Mostrar tabla
+        st.dataframe(df_con_total, use_container_width=True, hide_index=True)
 
     with t3:
-        st.subheader("📂 Documentos en Drive")
+        st.subheader("📂 Repositorio")
         if f_empresa and len(f_empresa) == 1:
             archivos = list_files_in_folder(f_empresa[0])
             if archivos:
