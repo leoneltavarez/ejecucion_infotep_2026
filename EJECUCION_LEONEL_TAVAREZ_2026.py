@@ -20,7 +20,6 @@ st.markdown("""
         border-left: 5px solid #0056b3;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
     }
-    /* Fila de totales al final de la tabla */
     .total-row-box {
         background-color: #0056b3;
         color: white;
@@ -96,6 +95,8 @@ def load_and_merge_data():
 
         df_b['CODIGO CURSO'] = df_b['CODIGO CURSO'].apply(safe_clean)
         df_a['CODIGO CURSO'] = df_a['CODIGO CURSO'].apply(safe_clean)
+        if 'RNC' in df_b.columns:
+            df_b['RNC'] = df_b['RNC'].apply(safe_clean)
 
         if 'FACILITADOR' in df_a.columns:
             df_a_sub = df_a[['CODIGO CURSO', 'FACILITADOR']].drop_duplicates(subset=['CODIGO CURSO'])
@@ -107,12 +108,10 @@ def load_and_merge_data():
         df_final = df_final[df_final['ESTADO'].isin(['Iniciado', 'Cerrado'])]
 
         # ─── CONVERSIÓN CRÍTICA DE FECHAS ────────────────────────────────────────
-        # Extraemos solo la parte date para comparaciones exactas sin interferencia de horas
         df_final['FECHA_DT'] = pd.to_datetime(
-            df_final['FECHA INICIO'], errors='coerce'
+            df_final['FECHA INICIO'], dayfirst=True, errors='coerce'
         ).dt.date
         df_final = df_final.dropna(subset=['FECHA_DT'])
-        # Ordenamos desde el origen por fecha ascendente
         df_final = df_final.sort_values(by='FECHA_DT', ascending=True).reset_index(drop=True)
         # ─────────────────────────────────────────────────────────────────────────
 
@@ -137,55 +136,63 @@ df = load_and_merge_data()
 if not df.empty:
     st.sidebar.header("🛠️ Filtros de Control")
 
-    if st.sidebar.button("🔄 Sincronizar Datos"):
+    if st.sidebar.button("🔄 Sincronizar con Google Sheets"):
         st.cache_data.clear()
         st.rerun()
 
     st.sidebar.markdown("---")
 
-    # ─── FILTRO DE FECHA CORREGIDO ────────────────────────────────────────────
+    # ─── FILTRO DE FECHA ─────────────────────────────────────────────────────────
     st.sidebar.subheader("📅 Periodo de Capacitación")
     min_d, max_d = df['FECHA_DT'].min(), df['FECHA_DT'].max()
 
     rango_fecha = st.sidebar.date_input(
         "Rango de Fechas (Día/Mes/Año)",
-        value=(min_d, max_d),      # ← tupla evita el fallo de isinstance con list
+        value=(min_d, max_d),
         min_value=min_d,
         max_value=max_d,
         format="DD/MM/YYYY"
     )
 
-    # Streamlit puede devolver tupla de 1 o 2 elementos mientras el usuario elige
     if isinstance(rango_fecha, (list, tuple)) and len(rango_fecha) == 2:
-        fecha_inicio = rango_fecha[0]
-        fecha_fin    = rango_fecha[1]
-        # Regla: >= inicio  Y  < fin  (el día final queda excluido)
         df_f = df[
-            (df['FECHA_DT'] >= fecha_inicio) &
-            (df['FECHA_DT'] <  fecha_fin)
+            (df['FECHA_DT'] >= rango_fecha[0]) &
+            (df['FECHA_DT'] <  rango_fecha[1])
         ].copy()
     elif isinstance(rango_fecha, (list, tuple)) and len(rango_fecha) == 1:
         df_f = df[df['FECHA_DT'] >= rango_fecha[0]].copy()
     else:
         df_f = df.copy()
-    # ─────────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────────
 
-    # --- FILTROS DINÁMICOS ---
-    f_empresa = st.sidebar.multiselect("Empresa", sorted(df_f['EMPRESA'].unique()))
-    if f_empresa:
-        df_f = df_f[df_f['EMPRESA'].isin(f_empresa)]
+    # ─── FILTROS EN CASCADA ───────────────────────────────────────────────────────
+    # Cada filtro reduce las opciones del siguiente según lo seleccionado arriba
 
+    # 1. EMPRESA — opciones del universo filtrado por fecha
+    f_empresa = st.sidebar.multiselect(
+        "Empresa", sorted(df_f['EMPRESA'].unique())
+    )
+    df_f1 = df_f[df_f['EMPRESA'].isin(f_empresa)] if f_empresa else df_f
+
+    # 2. FACILITADOR — solo los facilitadores que existen en las empresas seleccionadas
     f_facilitador = st.sidebar.multiselect(
-        "Facilitador", sorted(df_f['FACILITADOR'].unique().astype(str))
+        "Facilitador", sorted(df_f1['FACILITADOR'].dropna().unique().astype(str))
     )
-    if f_facilitador:
-        df_f = df_f[df_f['FACILITADOR'].isin(f_facilitador)]
+    df_f2 = df_f1[df_f1['FACILITADOR'].isin(f_facilitador)] if f_facilitador else df_f1
 
+    # 3. ESTADO — solo los estados que existen tras los filtros anteriores
     f_estado = st.sidebar.multiselect(
-        "Estado", sorted(df_f['ESTADO'].unique()), default=sorted(df_f['ESTADO'].unique())
+        "Estado", sorted(df_f2['ESTADO'].unique()),
+        default=sorted(df_f2['ESTADO'].unique())
     )
-    if f_estado:
-        df_f = df_f[df_f['ESTADO'].isin(f_estado)]
+    df_f3 = df_f2[df_f2['ESTADO'].isin(f_estado)] if f_estado else df_f2
+
+    # 4. ACCIÓN FORMATIVA — solo las que existen tras los filtros anteriores
+    f_curso = st.sidebar.multiselect(
+        "Acción Formativa", sorted(df_f3['ACCION FORMATIVA'].unique())
+    )
+    df_f = df_f3[df_f3['ACCION FORMATIVA'].isin(f_curso)] if f_curso else df_f3
+    # ─────────────────────────────────────────────────────────────────────────────
 
     # --- TABS ---
     t1, t2, t3 = st.tabs(["📊 Dashboard Maestro", "📋 Tabla de Datos", "📂 Repositorio"])
@@ -204,74 +211,88 @@ if not df.empty:
 
         if not df_f.empty:
 
-            # ── GRÁFICA 1: Horas y Participantes por Empresa ──
-            st.subheader("📊 Alcance por Empresa")
-            df_g1 = df_f.groupby('EMPRESA')[['HORAS EJECUTADAS', 'PARTICIPANTES']].sum().reset_index()
+            # ── GRÁFICA 1: Acciones Formativas, Horas y Participantes por Empresa ──
+            st.subheader("1. Alcance Operativo por Empresa")
+            df_g1 = df_f.groupby('EMPRESA').agg(
+                ACCIONES_FORMATIVAS=('ACCION FORMATIVA', 'count'),
+                HORAS_EJECUTADAS=('HORAS EJECUTADAS', 'sum'),
+                PARTICIPANTES=('PARTICIPANTES', 'sum')
+            ).reset_index()
             fig1 = px.bar(
-                df_g1, x='EMPRESA', y=['HORAS EJECUTADAS', 'PARTICIPANTES'],
+                df_g1, x='EMPRESA',
+                y=['ACCIONES_FORMATIVAS', 'HORAS_EJECUTADAS', 'PARTICIPANTES'],
                 barmode='group', text_auto=True,
-                color_discrete_map={'HORAS EJECUTADAS': C_AZUL, 'PARTICIPANTES': C_AMARILLO}
+                color_discrete_map={
+                    'ACCIONES_FORMATIVAS': C_VERDE,
+                    'HORAS_EJECUTADAS':    C_AZUL,
+                    'PARTICIPANTES':       C_AMARILLO
+                },
+                labels={
+                    'ACCIONES_FORMATIVAS': 'Acciones Formativas',
+                    'HORAS_EJECUTADAS':    'Horas Ejecutadas',
+                    'PARTICIPANTES':       'Participantes'
+                }
             )
-            fig1.update_layout(xaxis_title="Empresa", yaxis_title="Total", legend_title="Indicador")
+            fig1.update_layout(
+                xaxis_title="Empresa", yaxis_title="Total", legend_title="Indicador",
+                yaxis=dict(showgrid=False, tickformat="d"),
+                xaxis=dict(showgrid=False),
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
             st.plotly_chart(fig1, use_container_width=True)
 
             st.markdown("---")
 
-            # ── GRÁFICA 2: Niveles Jerárquicos (Operarios / Mandos Medios / Gerentes) ──
-            st.subheader("🏭 Distribución por Nivel Jerárquico")
-            df_g2 = df_f[['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES']].sum().reset_index()
-            df_g2.columns = ['Nivel', 'Total']
-            fig2 = px.bar(
-                df_g2, x='Nivel', y='Total',
-                text_auto=True,
-                color='Nivel',
-                color_discrete_map={
-                    'OPERARIOS':     C_AZUL,
-                    'MANDOS MEDIOS': C_AMARILLO,
-                    'GERENTES':      C_VERDE
-                }
-            )
-            fig2.update_layout(showlegend=False, xaxis_title="Nivel", yaxis_title="Participantes")
-            st.plotly_chart(fig2, use_container_width=True)
+            col_a, col_b = st.columns(2)
 
-            st.markdown("---")
+            # ── GRÁFICA 2: Distribución de Niveles Jerárquicos por Empresa (apilada) ──
+            with col_a:
+                st.subheader("2. Distribución de Niveles")
+                df_g2 = df_f.groupby('EMPRESA')[['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES']].sum().reset_index()
+                fig2 = px.bar(
+                    df_g2, x='EMPRESA',
+                    y=['OPERARIOS', 'MANDOS MEDIOS', 'GERENTES'],
+                    barmode='stack', text_auto=True,
+                    color_discrete_map={
+                        'OPERARIOS':     C_AZUL,
+                        'MANDOS MEDIOS': C_AMARILLO,
+                        'GERENTES':      C_ROJO
+                    }
+                )
+                fig2.update_layout(
+                    xaxis_title="Empresa", yaxis_title="Participantes", legend_title="Nivel",
+                    yaxis=dict(showgrid=False, tickformat="d"),
+                    xaxis=dict(showgrid=False),
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig2, use_container_width=True)
 
-            # ── GRÁFICA 3: Resumen por Facilitador ──
-            st.subheader("👤 Desempeño por Facilitador")
-            df_g3 = df_f.groupby('FACILITADOR').agg(
-                Acciones_Formativas=('ACCION FORMATIVA', 'count'),
-                Horas_Ejecutadas=('HORAS EJECUTADAS', 'sum'),
-                Participantes=('PARTICIPANTES', 'sum'),
-                Empresas=('EMPRESA', 'nunique')
-            ).reset_index().rename(columns={'FACILITADOR': 'Facilitador'})
-
-            fig3 = px.bar(
-                df_g3, x='Facilitador',
-                y=['Acciones_Formativas', 'Horas_Ejecutadas', 'Participantes'],
-                barmode='group', text_auto=True,
-                color_discrete_map={
-                    'Acciones_Formativas': C_VERDE,
-                    'Horas_Ejecutadas':    C_AZUL,
-                    'Participantes':       C_AMARILLO
-                },
-                labels={
-                    'Acciones_Formativas': 'Acciones Formativas',
-                    'Horas_Ejecutadas':    'Horas Ejecutadas',
-                    'Participantes':       'Participantes'
-                }
-            )
-            fig3.update_layout(xaxis_title="Facilitador", yaxis_title="Total", legend_title="Indicador")
-            st.plotly_chart(fig3, use_container_width=True)
-
-            # Tabla detalle por facilitador
-            st.dataframe(
-                df_g3.rename(columns={
-                    'Acciones_Formativas': 'Acciones Formativas',
-                    'Horas_Ejecutadas':    'Horas Ejecutadas'
-                }),
-                use_container_width=True,
-                hide_index=True
-            )
+            # ── GRÁFICA 3: Acciones por Facilitador coloreadas por Empresa ──
+            with col_b:
+                st.subheader("3. Ejecución por Facilitador")
+                df_g3 = df_f.groupby(['FACILITADOR', 'EMPRESA']).agg(
+                    ACCIONES=('ACCION FORMATIVA', 'count'),
+                    HORAS=('HORAS EJECUTADAS', 'sum'),
+                    PARTICIPANTES=('PARTICIPANTES', 'sum')
+                ).reset_index()
+                fig3 = px.bar(
+                    df_g3, x='FACILITADOR', y='ACCIONES',
+                    color='EMPRESA', text_auto=True,
+                    barmode='stack',
+                    labels={
+                        'FACILITADOR': 'Facilitador',
+                        'ACCIONES':    'Acciones Formativas',
+                        'EMPRESA':     'Empresa'
+                    }
+                )
+                fig3.update_layout(
+                    xaxis_title="Facilitador", yaxis_title="Acciones Formativas",
+                    legend_title="Empresa",
+                    yaxis=dict(showgrid=False, tickformat="d"),
+                    xaxis=dict(showgrid=False),
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig3, use_container_width=True)
 
         else:
             st.warning("No hay datos para el rango de fechas y filtros seleccionados.")
@@ -282,8 +303,11 @@ if not df.empty:
 
         columnas = [
             'EMPRESA', 'RNC', 'ACCION FORMATIVA', 'FECHA INICIO', 'FECHA TERMINO',
-            'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS', 'PARTICIPANTES'
+            'CODIGO CURSO', 'FACILITADOR', 'ESTADO', 'HORAS EJECUTADAS',
+            'HORAS FALTAN', 'OPERARIOS', 'MANDOS MEDIOS', 'GERENTES', 'PARTICIPANTES'
         ]
+        # Solo incluir columnas que existan en el df
+        columnas = [c for c in columnas if c in df_f.columns]
 
         # ── Pre-cálculo de totales ──
         total_acciones      = len(df_f)
@@ -295,18 +319,11 @@ if not df.empty:
         cd1, cd2, _ = st.columns([1.2, 1.2, 3.6])
 
         with cd1:
-            # CSV con fila de totales al final
-            fila_total_csv = {
-                'EMPRESA': 'TOTAL GENERAL',
-                'RNC': '',
-                'ACCION FORMATIVA': f'{total_acciones} acciones',
-                'FECHA INICIO': '',
-                'FECHA TERMINO': '',
-                'FACILITADOR': '',
-                'ESTADO': '',
-                'HORAS EJECUTADAS': total_horas,
-                'PARTICIPANTES': total_participantes
-            }
+            fila_total_csv = {col: '' for col in columnas}
+            fila_total_csv['EMPRESA']          = 'TOTAL GENERAL'
+            fila_total_csv['ACCION FORMATIVA'] = f'{total_acciones} acciones'
+            fila_total_csv['HORAS EJECUTADAS'] = total_horas
+            fila_total_csv['PARTICIPANTES']    = total_participantes
             df_csv_export = pd.concat(
                 [df_f[columnas], pd.DataFrame([fila_total_csv])],
                 ignore_index=True
@@ -318,7 +335,6 @@ if not df.empty:
             )
 
         with cd2:
-            # Excel con fila de totales formateada (azul INFOTEP + amarillo)
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_f[columnas].to_excel(writer, index=False, sheet_name='Reporte')
@@ -343,11 +359,9 @@ if not df.empty:
                     'border': 1
                 })
 
-                # Encabezados con color azul
                 for col_idx, col_name in enumerate(columnas):
                     worksheet.write(0, col_idx, col_name, fmt_header)
 
-                # Fila de totales al final
                 fila_total = len(df_f) + 1
                 col_map = {col: i for i, col in enumerate(columnas)}
 
@@ -356,26 +370,33 @@ if not df.empty:
 
                 worksheet.write(fila_total, col_map['EMPRESA'],
                                 '✔ TOTAL GENERAL', fmt_total_label)
-                worksheet.write(fila_total, col_map['ACCION FORMATIVA'],
-                                f'{total_acciones} Acciones Formativas', fmt_total_label)
+                if 'ACCION FORMATIVA' in col_map:
+                    worksheet.write(fila_total, col_map['ACCION FORMATIVA'],
+                                    f'{total_acciones} Acciones Formativas', fmt_total_label)
                 worksheet.write(fila_total, col_map['HORAS EJECUTADAS'],
                                 total_horas, fmt_total_num)
                 worksheet.write(fila_total, col_map['PARTICIPANTES'],
                                 total_participantes, fmt_total_num)
 
-                # Ancho de columnas
-                anchos = [30, 14, 42, 14, 14, 28, 12, 18, 14]
-                for i, ancho in enumerate(anchos):
-                    worksheet.set_column(i, i, ancho)
+                # Anchos de columna ajustados a las columnas visibles
+                anchos_map = {
+                    'EMPRESA': 28, 'RNC': 14, 'ACCION FORMATIVA': 40,
+                    'FECHA INICIO': 14, 'FECHA TERMINO': 14, 'CODIGO CURSO': 16,
+                    'FACILITADOR': 26, 'ESTADO': 12, 'HORAS EJECUTADAS': 18,
+                    'HORAS FALTAN': 14, 'OPERARIOS': 12, 'MANDOS MEDIOS': 15,
+                    'GERENTES': 12, 'PARTICIPANTES': 14
+                }
+                for i, col in enumerate(columnas):
+                    worksheet.set_column(i, i, anchos_map.get(col, 14))
 
                 worksheet.set_row(fila_total, 22)
 
             st.download_button("📥 Descargar Excel", output.getvalue(), "reporte.xlsx")
 
-        # ── Tabla ordenada por fecha ascendente ──
+        # ── Tabla de datos completa ──
         st.dataframe(df_f[columnas], use_container_width=True, hide_index=True)
 
-        # ── Totales dinámicos debajo de la tabla (estilo tabla dinámica) ──
+        # ── Totales dinámicos debajo de la tabla ──
         st.markdown(f"""
         <div class="total-row-box">
             <div class="total-item">
@@ -399,17 +420,19 @@ if not df.empty:
 
     # ════════════════════════════════════════════════════════════════════════════
     with t3:
-        st.subheader("📂 Repositorio")
+        st.subheader("📂 Documentos en Drive")
         if f_empresa and len(f_empresa) == 1:
             archivos = list_files_in_folder(f_empresa[0])
             if archivos:
+                st.write(f"Archivos para **{f_empresa[0]}**:")
+                st.markdown("---")
                 for a in archivos:
                     col_file, col_btn = st.columns([0.7, 0.3])
                     with col_file:
                         st.write(f"📄 {a['name']}")
                     with col_btn:
-                        st.link_button("Abrir", a['webViewLink'])
+                        st.link_button("Abrir Archivo", a['webViewLink'], use_container_width=True)
             else:
-                st.warning("No hay archivos en esta carpeta.")
+                st.warning("Carpeta vacía o sin acceso.")
         else:
-            st.info("Selecciona una sola empresa para ver documentos.")
+            st.info("ℹ️ Selecciona una sola empresa para gestionar sus documentos.")
